@@ -410,6 +410,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
                 .features
                 .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
         },
+        config.plan_mode_developer_instructions.clone(),
     ));
     let default_model = thread_manager
         .get_models_manager()

@@ -189,6 +189,7 @@ impl MessageProcessor {
                     .features
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
             },
+            config.plan_mode_developer_instructions.clone(),
         ));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {

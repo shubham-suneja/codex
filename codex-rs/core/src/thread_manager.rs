@@ -150,6 +150,7 @@ impl ThreadManager {
         session_source: SessionSource,
         model_catalog: Option<ModelsResponse>,
         collaboration_modes_config: CollaborationModesConfig,
+        plan_mode_developer_instructions: Option<String>,
     ) -> Self {
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
@@ -168,6 +169,7 @@ impl ThreadManager {
                     auth_manager.clone(),
                     model_catalog,
                     collaboration_modes_config,
+                    plan_mode_developer_instructions,
                 )),
                 skills_manager,
                 plugins_manager,
