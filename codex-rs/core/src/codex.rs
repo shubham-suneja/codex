@@ -2263,6 +2263,7 @@ impl Session {
 
         Arc::new(TurnContext {
             sub_id: current_turn_context.sub_id.clone(),
+            realtime_active: current_turn_context.realtime_active,
             config: Arc::new(per_turn_config.clone()),
             auth_manager: current_turn_context.auth_manager.clone(),
             model_info: model_info.clone(),
@@ -2485,17 +2486,18 @@ impl Session {
         };
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
-        let effective_previous_turn_settings = match (
-            reference_context_item,
-            previous_turn_settings,
-        ) {
-            (Some(item), previous_turn_settings) => Some(PreviousTurnSettings {
+        let effective_previous_turn_settings = if reference_context_item
+            .and_then(|item| item.turn_id.as_deref())
+            == Some(current_context.sub_id.as_str())
+        {
+            reference_context_item.map(|item| PreviousTurnSettings {
                 model: item.model.clone(),
                 realtime_active: item
                     .realtime_active
                     .or(previous_turn_settings.and_then(|settings| settings.realtime_active)),
-            }),
-            (None, previous_turn_settings) => previous_turn_settings,
+            })
+        } else {
+            previous_turn_settings
         };
         crate::context_manager::updates::build_settings_update_items(
             reference_context_item,
@@ -3314,10 +3316,7 @@ impl Session {
         state.reference_context_item()
     }
 
-    async fn maybe_record_context_updates_for_turn(
-        &self,
-        turn_context: &TurnContext,
-    ) {
+    async fn maybe_record_context_updates_for_turn(&self, turn_context: &TurnContext) {
         let current_context_item = turn_context.to_turn_context_item();
         let reference_context_item = {
             let state = self.state.lock().await;
@@ -5166,6 +5165,7 @@ pub(crate) async fn run_turn(
     let mut client_session_model_slug = turn_context.model_info.slug.clone();
     let initial_turn_context = Arc::clone(&turn_context);
     let mut is_first_sampling_request = true;
+    let mut should_check_pre_request_compaction = false;
 
     loop {
         let turn_context = sess
@@ -5176,7 +5176,7 @@ pub(crate) async fn run_turn(
             .model_info
             .auto_compact_token_limit()
             .unwrap_or(i64::MAX);
-        if !is_first_sampling_request {
+        if should_check_pre_request_compaction {
             let total_usage_tokens = sess.get_total_token_usage().await;
             let token_limit_reached = total_usage_tokens >= auto_compact_limit;
             let estimated_token_count = sess.get_estimated_token_count(turn_context.as_ref()).await;
@@ -5188,6 +5188,7 @@ pub(crate) async fn run_turn(
                 token_limit_reached,
                 "pre sampling token usage"
             );
+            should_check_pre_request_compaction = false;
             if token_limit_reached {
                 if run_auto_compact(
                     &sess,
@@ -5291,6 +5292,7 @@ pub(crate) async fn run_turn(
                     needs_follow_up,
                     "post sampling token usage"
                 );
+                should_check_pre_request_compaction = needs_follow_up;
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
@@ -8875,8 +8877,10 @@ mod tests {
     #[tokio::test]
     async fn override_turn_context_updates_active_turn_context() {
         let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-        let mut active_turn = crate::state::ActiveTurn::default();
-        active_turn.current_turn_context = Some(Arc::clone(&tc));
+        let active_turn = crate::state::ActiveTurn {
+            current_turn_context: Some(Arc::clone(&tc)),
+            ..Default::default()
+        };
         *sess.active_turn.lock().await = Some(active_turn);
 
         let next_model = if tc.model_info.slug == "gpt-5.1" {
@@ -9251,12 +9255,12 @@ mod tests {
         }
 
         let update_items = session
-            .build_settings_update_items(Some(&previous_context_item), &turn_context)
+            .build_settings_update_items(Some(&previous_context_item), &previous_context)
             .await;
         assert_eq!(update_items, Vec::new());
 
         session
-            .record_context_updates_and_set_reference_context_item(&turn_context)
+            .record_context_updates_and_set_reference_context_item(&previous_context)
             .await;
 
         assert_eq!(
@@ -9331,11 +9335,12 @@ mod tests {
             )
             .await;
 
-        let update_items = session.build_settings_update_items(
-            Some(&switched_context.to_turn_context_item()),
-            Some(previous_context.model_info.slug.as_str()),
-            &switched_back_context,
-        );
+        let update_items = session
+            .build_settings_update_items(
+                Some(&switched_context.to_turn_context_item()),
+                &switched_back_context,
+            )
+            .await;
 
         let developer_text = update_items
             .iter()

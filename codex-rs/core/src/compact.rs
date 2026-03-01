@@ -191,7 +191,11 @@ async fn run_compact_task_inner(
     let history_items = history_snapshot.raw_items();
     let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
-    let user_messages = collect_user_messages(history_items);
+    let compact_prompt = turn_context.compact_prompt();
+    let user_messages = collect_user_messages(history_items)
+        .into_iter()
+        .filter(|message| message != compact_prompt)
+        .collect::<Vec<_>>();
 
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
 
