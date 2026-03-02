@@ -61,11 +61,11 @@ pub(crate) fn builder_from_session_meta(
     Some(builder)
 }
 
-pub(crate) fn builder_from_items(
-    items: &[RolloutItem],
+pub(crate) fn builder_from_items<'a>(
+    items: impl IntoIterator<Item = &'a RolloutItem>,
     rollout_path: &Path,
 ) -> Option<ThreadMetadataBuilder> {
-    if let Some(session_meta) = items.iter().find_map(|item| match item {
+    if let Some(session_meta) = items.into_iter().find_map(|item| match item {
         RolloutItem::SessionMeta(meta_line) => Some(meta_line),
         RolloutItem::ResponseItem(_)
         | RolloutItem::Compacted(_)
@@ -98,26 +98,27 @@ pub(crate) async fn extract_metadata_from_rollout(
     otel: Option<&OtelManager>,
 ) -> anyhow::Result<ExtractionOutcome> {
     let (source, _thread_id, parse_errors) = RolloutStore::load_source(rollout_path).await?;
-    // Metadata extraction scans an arbitrary persisted rollout file and currently folds over a
-    // complete `&[RolloutItem]`. It deliberately consumes the loaded source into raw items here,
-    // while still sharing the same file-parsing entrypoint as replay code.
-    // TODO(ccunningham): once the rollout source itself becomes disk-lazy, stream metadata
-    // extraction directly from that source instead of materializing the full rollout here.
-    let items = source.into_items();
-    if items.is_empty() {
+    let rollout_start = source.start_index();
+    if source.iter_forward_from(rollout_start).next().is_none() {
         return Err(anyhow::anyhow!(
             "empty session file: {}",
             rollout_path.display()
         ));
     }
-    let builder = builder_from_items(items.as_slice(), rollout_path).ok_or_else(|| {
+    let builder = builder_from_items(
+        source
+            .iter_forward_from(rollout_start)
+            .map(|(_, item)| item),
+        rollout_path,
+    )
+    .ok_or_else(|| {
         anyhow::anyhow!(
             "rollout missing metadata builder: {}",
             rollout_path.display()
         )
     })?;
     let mut metadata = builder.build(default_provider);
-    for item in &items {
+    for (_, item) in source.iter_forward_from(rollout_start) {
         apply_rollout_item(&mut metadata, item, default_provider);
     }
     if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
