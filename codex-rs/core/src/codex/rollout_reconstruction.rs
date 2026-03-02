@@ -29,18 +29,18 @@ impl RolloutIndex {
 }
 
 #[derive(Debug)]
-struct InMemoryReverseRolloutSource<'a> {
-    rollout_items: &'a [RolloutItem],
+struct InMemoryReverseRolloutSource {
+    rollout_items: Vec<RolloutItem>,
     startup_rollout_len: i64,
 }
 
-impl InMemoryReverseRolloutSource<'_> {
-    fn new(rollout_items: &[RolloutItem]) -> InMemoryReverseRolloutSource<'_> {
+impl InMemoryReverseRolloutSource {
+    fn new(rollout_items: Vec<RolloutItem>) -> Self {
         let startup_rollout_len = match i64::try_from(rollout_items.len()) {
             Ok(len) => len,
             Err(_) => panic!("rollout length should fit in i64"),
         };
-        InMemoryReverseRolloutSource {
+        Self {
             rollout_items,
             startup_rollout_len,
         }
@@ -181,7 +181,7 @@ impl Session {
     pub(super) async fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
-        rollout_items: &[RolloutItem],
+        rollout_items: Vec<RolloutItem>,
     ) -> RolloutReconstruction {
         let source = InMemoryReverseRolloutSource::new(rollout_items);
         // Replay metadata should already match the shape of the future lazy reverse loader, even

@@ -74,9 +74,9 @@ pub struct RolloutRecorder {
     pub(crate) rollout_path: PathBuf,
     state_db: Option<StateDbHandle>,
     event_persistence_mode: EventPersistenceMode,
-    // Live sanitized rollout items used by rollback/backtracking so reconstruction can read the
-    // same up-to-date item stream that new writes append to, without reparsing the session file.
-    pub(crate) live_items: Arc<Mutex<Vec<RolloutItem>>>,
+    // Live sanitized rollout items owned by the recorder. Reconstruction should read this
+    // snapshot through recorder methods so rollout reading and persistence stay under one manager.
+    live_items: Arc<Mutex<Vec<RolloutItem>>>,
 }
 
 #[derive(Clone)]
@@ -493,6 +493,11 @@ impl RolloutRecorder {
         self.rollout_path.as_path()
     }
 
+    #[cfg(test)]
+    async fn live_rollout_items_snapshot(&self) -> Vec<RolloutItem> {
+        self.live_items.lock().await.clone()
+    }
+
     pub fn state_db(&self) -> Option<StateDbHandle> {
         self.state_db.clone()
     }
@@ -546,6 +551,9 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
     }
 
+    // TODO: Fold these legacy disk-read helpers into the same rollout source abstraction that
+    // owns live in-memory appended items, so reconstruction and metadata code do not choose
+    // between separate read paths.
     pub(crate) async fn load_rollout_items(
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
@@ -1274,7 +1282,7 @@ mod tests {
         task_a.await.expect("join task A")?;
         task_b.await.expect("join task B")?;
 
-        let actual_live_items = serde_json::to_value(&*recorder.live_items.lock().await)?;
+        let actual_live_items = serde_json::to_value(recorder.live_rollout_items_snapshot().await)?;
         let expected_live_items = serde_json::to_value(vec![user_message_a, user_message_b])?;
         assert_eq!(actual_live_items, expected_live_items);
 
