@@ -22,6 +22,12 @@ pub(super) struct RolloutReconstruction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RolloutIndex(i64);
 
+impl RolloutIndex {
+    fn next_newer(self) -> Self {
+        Self(self.0 + 1)
+    }
+}
+
 #[derive(Debug)]
 struct InMemoryReverseRolloutSource<'a> {
     rollout_items: &'a [RolloutItem],
@@ -211,7 +217,7 @@ impl Session {
                         && let Some(replacement_history) = &compacted.replacement_history
                     {
                         active_segment.base_replacement_history = Some(replacement_history);
-                        rollout_suffix_start = RolloutIndex(index.0 + 1);
+                        rollout_suffix_start = index.next_newer();
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
