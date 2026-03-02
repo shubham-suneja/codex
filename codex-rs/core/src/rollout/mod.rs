@@ -25,8 +25,8 @@ pub use list::rollout_date_parts;
 pub use session_index::append_thread_name;
 pub use session_index::find_thread_name_by_id;
 pub use session_index::find_thread_path_by_name_str;
-pub use store::RolloutStore as RolloutRecorder;
-pub use store::RolloutStoreParams as RolloutRecorderParams;
+pub use store::RolloutStore;
+pub use store::RolloutStoreParams;
 
 #[cfg(test)]
 pub mod tests;

@@ -193,7 +193,7 @@ use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
 use codex_core::NewThread;
-use codex_core::RolloutRecorder;
+use codex_core::RolloutStore;
 use codex_core::SessionMeta;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
@@ -3426,7 +3426,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        match RolloutRecorder::get_rollout_history(&rollout_path).await {
+        match RolloutStore::get_rollout_history(&rollout_path).await {
             Ok(initial_history) => Some(initial_history),
             Err(err) => {
                 self.send_invalid_request_error(
@@ -3884,7 +3884,7 @@ impl CodexMessageProcessor {
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
             let page = if archived {
-                RolloutRecorder::list_archived_threads(
+                RolloutStore::list_archived_threads(
                     &self.config,
                     page_size,
                     cursor_obj.as_ref(),
@@ -3901,7 +3901,7 @@ impl CodexMessageProcessor {
                     data: None,
                 })?
             } else {
-                RolloutRecorder::list_threads(
+                RolloutStore::list_threads(
                     &self.config,
                     page_size,
                     cursor_obj.as_ref(),
@@ -4450,7 +4450,7 @@ impl CodexMessageProcessor {
         } = params;
 
         let thread_history = if let Some(path) = path {
-            match RolloutRecorder::get_rollout_history(&path).await {
+            match RolloutStore::get_rollout_history(&path).await {
                 Ok(initial_history) => initial_history,
                 Err(err) => {
                     self.send_invalid_request_error(
@@ -4466,7 +4466,7 @@ impl CodexMessageProcessor {
                 .await
             {
                 Ok(Some(found_path)) => {
-                    match RolloutRecorder::get_rollout_history(&found_path).await {
+                    match RolloutStore::get_rollout_history(&found_path).await {
                         Ok(initial_history) => initial_history,
                         Err(err) => {
                             self.send_invalid_request_error(
@@ -7764,7 +7764,7 @@ pub(crate) async fn read_summary_from_rollout(
 pub(crate) async fn read_rollout_items_from_rollout(
     path: &Path,
 ) -> std::io::Result<Vec<RolloutItem>> {
-    let items = match RolloutRecorder::get_rollout_history(path).await? {
+    let items = match RolloutStore::get_rollout_history(path).await? {
         InitialHistory::New => Vec::new(),
         InitialHistory::Forked(items) => items,
         InitialHistory::Resumed(resumed) => resumed.history,

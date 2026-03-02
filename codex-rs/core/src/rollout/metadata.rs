@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::rollout;
-use crate::rollout::RolloutRecorder;
+use crate::rollout::RolloutStore;
 use crate::rollout::list::parse_timestamp_uuid_from_filename;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
@@ -97,7 +97,7 @@ pub(crate) async fn extract_metadata_from_rollout(
     default_provider: &str,
     otel: Option<&OtelManager>,
 ) -> anyhow::Result<ExtractionOutcome> {
-    let (source, _thread_id, parse_errors) = RolloutRecorder::load_source(rollout_path).await?;
+    let (source, _thread_id, parse_errors) = RolloutStore::load_source(rollout_path).await?;
     // Metadata extraction scans an arbitrary persisted rollout file and currently folds over a
     // complete `&[RolloutItem]`. It deliberately consumes the loaded source into raw items here,
     // while still sharing the same file-parsing entrypoint as replay code.

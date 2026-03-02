@@ -18,7 +18,7 @@ use crate::plugins::PluginsManager;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
-use crate::rollout::RolloutRecorder;
+use crate::rollout::RolloutStore;
 use crate::rollout::truncation;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillsManager;
@@ -357,7 +357,7 @@ impl ThreadManager {
         rollout_path: PathBuf,
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewThread> {
-        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let initial_history = RolloutStore::get_rollout_history(&rollout_path).await?;
         self.resume_thread_with_history(config, initial_history, auth_manager, false)
             .await
     }
@@ -409,7 +409,7 @@ impl ThreadManager {
         path: PathBuf,
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
-        let history = RolloutRecorder::get_rollout_history(&path).await?;
+        let history = RolloutStore::get_rollout_history(&path).await?;
         let history = truncate_before_nth_user_message(history, nth_user_message);
         self.state
             .spawn_thread(
@@ -516,7 +516,7 @@ impl ThreadManagerState {
         session_source: SessionSource,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<NewThread> {
-        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let initial_history = RolloutStore::get_rollout_history(&rollout_path).await?;
         self.spawn_thread_with_source(
             config,
             initial_history,

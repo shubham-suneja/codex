@@ -240,8 +240,8 @@ use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
-use crate::rollout::RolloutRecorder;
-use crate::rollout::RolloutRecorderParams;
+use crate::rollout::RolloutStore;
+use crate::rollout::RolloutStoreParams;
 use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
 use crate::rollout::policy::EventPersistenceMode;
@@ -1169,7 +1169,7 @@ impl Session {
                 let conversation_id = ThreadId::default();
                 (
                     conversation_id,
-                    RolloutRecorderParams::new(
+                    RolloutStoreParams::new(
                         conversation_id,
                         forked_from_id,
                         session_source,
@@ -1187,7 +1187,7 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => (
                 resumed_history.conversation_id,
-                RolloutRecorderParams::resume(
+                RolloutStoreParams::resume(
                     resumed_history.rollout_path.clone(),
                     if session_configuration.persist_extended_history {
                         EventPersistenceMode::Extended
@@ -1207,7 +1207,7 @@ impl Session {
 
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
-        // - initialize RolloutRecorder with new or resumed session info
+        // - initialize RolloutStore with new or resumed session info
         // - perform default shell discovery
         // - load history metadata (skipped for subagents)
         let rollout_fut = async {
@@ -1215,14 +1215,14 @@ impl Session {
                 Ok::<_, anyhow::Error>((None, None))
             } else {
                 let state_db_ctx = state_db::init_if_enabled(&config, None).await;
-                let rollout_recorder = RolloutRecorder::new(
+                let rollout_store = RolloutStore::new(
                     &config,
                     rollout_params,
                     state_db_ctx.clone(),
                     state_builder.clone(),
                 )
                 .await?;
-                Ok((Some(rollout_recorder), state_db_ctx))
+                Ok((Some(rollout_store), state_db_ctx))
             }
         };
 
@@ -1252,18 +1252,16 @@ impl Session {
 
         // Join all independent futures.
         let (
-            rollout_recorder_and_state_db,
+            rollout_store_and_state_db,
             (history_log_id, history_entry_count),
             (auth, mcp_servers, auth_statuses),
         ) = tokio::join!(rollout_fut, history_meta_fut, auth_and_mcp_fut);
 
-        let (rollout_recorder, state_db_ctx) = rollout_recorder_and_state_db.map_err(|e| {
-            error!("failed to initialize rollout recorder: {e:#}");
+        let (rollout_store, state_db_ctx) = rollout_store_and_state_db.map_err(|e| {
+            error!("failed to initialize rollout store: {e:#}");
             e
         })?;
-        let rollout_path = rollout_recorder
-            .as_ref()
-            .map(|rec| rec.rollout_path.clone());
+        let rollout_path = rollout_store.as_ref().map(|rec| rec.rollout_path.clone());
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
@@ -1486,7 +1484,7 @@ impl Session {
             hooks: Hooks::new(HooksConfig {
                 legacy_notify_argv: config.notify.clone(),
             }),
-            rollout: Mutex::new(rollout_recorder),
+            rollout: Mutex::new(rollout_store),
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -1659,7 +1657,7 @@ impl Session {
         if let Some(rec) = recorder
             && let Err(e) = rec.flush().await
         {
-            warn!("failed to flush rollout recorder: {e}");
+            warn!("failed to flush rollout store: {e}");
         }
     }
 
@@ -1671,7 +1669,7 @@ impl Session {
         if let Some(rec) = recorder
             && let Err(e) = rec.persist().await
         {
-            warn!("failed to materialize rollout recorder: {e}");
+            warn!("failed to materialize rollout store: {e}");
         }
     }
 
@@ -4546,7 +4544,7 @@ mod handlers {
             &[],
         );
 
-        // Gracefully flush and shutdown rollout recorder on session end so tests
+        // Gracefully flush and shutdown rollout store on session end so tests
         // that inspect the rollout file do not race with the background writer.
         let recorder_opt = {
             let mut guard = sess.services.rollout.lock().await;
@@ -4555,11 +4553,11 @@ mod handlers {
         if let Some(rec) = recorder_opt
             && let Err(e) = rec.shutdown().await
         {
-            warn!("failed to shutdown rollout recorder: {e}");
+            warn!("failed to shutdown rollout store: {e}");
             let event = Event {
                 id: sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
-                    message: "Failed to shutdown rollout recorder".to_string(),
+                    message: "Failed to shutdown rollout store".to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
             };
@@ -6565,8 +6563,8 @@ mod tests {
     use crate::protocol::TokenUsage;
     use crate::protocol::TokenUsageInfo;
     use crate::protocol::UserMessageEvent;
-    use crate::rollout::RolloutRecorder;
-    use crate::rollout::RolloutRecorderParams;
+    use crate::rollout::RolloutStore;
+    use crate::rollout::RolloutStoreParams;
     use crate::rollout::policy::EventPersistenceMode;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
@@ -8990,9 +8988,9 @@ mod tests {
             state.set_reference_context_item(Some(previous_context_item.clone()));
         }
         let config = session.get_config().await;
-        let recorder = RolloutRecorder::new(
+        let recorder = RolloutStore::new(
             config.as_ref(),
-            RolloutRecorderParams::new(
+            RolloutStoreParams::new(
                 ThreadId::default(),
                 None,
                 SessionSource::Exec,
@@ -9004,7 +9002,7 @@ mod tests {
             None,
         )
         .await
-        .expect("create rollout recorder");
+        .expect("create rollout store");
         let rollout_path = recorder.rollout_path().to_path_buf();
         {
             let mut rollout = session.services.rollout.lock().await;
@@ -9033,7 +9031,7 @@ mod tests {
         session.ensure_rollout_materialized().await;
         session.flush_rollout().await;
 
-        let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        let InitialHistory::Resumed(resumed) = RolloutStore::get_rollout_history(&rollout_path)
             .await
             .expect("read rollout history")
         else {
@@ -9087,9 +9085,9 @@ mod tests {
             .with_model(next_model.to_string(), &session.services.models_manager)
             .await;
         let config = session.get_config().await;
-        let recorder = RolloutRecorder::new(
+        let recorder = RolloutStore::new(
             config.as_ref(),
-            RolloutRecorderParams::new(
+            RolloutStoreParams::new(
                 ThreadId::default(),
                 None,
                 SessionSource::Exec,
@@ -9101,7 +9099,7 @@ mod tests {
             None,
         )
         .await
-        .expect("create rollout recorder");
+        .expect("create rollout store");
         let rollout_path = recorder.rollout_path().to_path_buf();
         {
             let mut rollout = session.services.rollout.lock().await;
@@ -9135,7 +9133,7 @@ mod tests {
         session.ensure_rollout_materialized().await;
         session.flush_rollout().await;
 
-        let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        let InitialHistory::Resumed(resumed) = RolloutStore::get_rollout_history(&rollout_path)
             .await
             .expect("read rollout history")
         else {
