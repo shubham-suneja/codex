@@ -596,6 +596,7 @@ mod tests {
             auth_manager,
             None,
             CollaborationModesConfig::default(),
+            None,
         );
         let known_slug = manager
             .get_remote_models()
@@ -627,6 +628,7 @@ mod tests {
             auth_manager,
             None,
             CollaborationModesConfig::default(),
+            None,
         );
         let known_slug = manager
             .get_remote_models()
