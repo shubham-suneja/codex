@@ -310,6 +310,8 @@ pub(crate) async fn handle_start(
     };
 
     info!("realtime conversation started");
+    sess.refresh_current_active_turn_context_from_realtime_state()
+        .await;
 
     sess.send_event_raw(Event {
         id: sub_id.clone(),
@@ -348,6 +350,9 @@ pub(crate) async fn handle_start(
         }
         if realtime_active.swap(false, Ordering::Relaxed) {
             info!("realtime conversation transport closed");
+            sess_clone
+                .refresh_current_active_turn_context_from_realtime_state()
+                .await;
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationClosed(
                     RealtimeConversationClosedEvent {
@@ -441,6 +446,8 @@ pub(crate) async fn handle_text(
 pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
     match sess.conversation.shutdown().await {
         Ok(()) => {
+            sess.refresh_current_active_turn_context_from_realtime_state()
+                .await;
             sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::RealtimeConversationClosed(RealtimeConversationClosedEvent {

@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used)]
 
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -19,6 +20,7 @@ use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -93,7 +95,7 @@ fn remote_realtime_test_codex_builder(
 }
 
 async fn start_remote_realtime_server() -> responses::WebSocketTestServer {
-    start_websocket_server(vec![vec![
+    let scripted_connection = vec![
         vec![json!({
             "type": "session.updated",
             "session": { "id": "sess_remote_compact", "instructions": "backend prompt" }
@@ -108,7 +110,12 @@ async fn start_remote_realtime_server() -> responses::WebSocketTestServer {
         vec![],
         vec![],
         vec![],
-    ]])
+    ];
+    start_websocket_server(vec![
+        scripted_connection.clone(),
+        scripted_connection.clone(),
+        scripted_connection,
+    ])
     .await
 }
 
@@ -149,6 +156,54 @@ async fn close_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
     Ok(())
 }
 
+fn read_rollout_lines(path: &Path) -> Result<Vec<RolloutLine>> {
+    Ok(fs::read_to_string(path)?
+        .lines()
+        .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
+        .collect())
+}
+
+fn rewrite_rollout_with_additional_turn_context(
+    path: &Path,
+    inserted_turn_context_items: &[TurnContextItem],
+) -> Result<()> {
+    let rollout_lines = read_rollout_lines(path)?;
+    let turn_id = rollout_lines
+        .iter()
+        .find_map(|line| match &line.item {
+            RolloutItem::TurnContext(ctx) => ctx.turn_id.clone(),
+            _ => None,
+        })
+        .expect("rollout should include a turn context item");
+    let mut inserted = false;
+    let mut rewritten = Vec::with_capacity(rollout_lines.len() + inserted_turn_context_items.len());
+
+    for line in rollout_lines {
+        if !inserted
+            && let RolloutItem::EventMsg(EventMsg::TurnComplete(event)) = &line.item
+            && event.turn_id == turn_id
+        {
+            for (idx, turn_context_item) in inserted_turn_context_items.iter().enumerate() {
+                rewritten.push(RolloutLine {
+                    timestamp: format!("2000-01-01T00:00:{idx:02}Z"),
+                    item: RolloutItem::TurnContext(turn_context_item.clone()),
+                });
+            }
+            inserted = true;
+        }
+        rewritten.push(line);
+    }
+
+    assert!(inserted, "expected to insert additional turn context items");
+    let serialized = rewritten
+        .into_iter()
+        .map(|line| serde_json::to_string(&line))
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    fs::write(path, format!("{serialized}\n"))?;
+    Ok(())
+}
+
 fn assert_request_contains_realtime_start(request: &responses::ResponsesRequest) {
     let body = request.body_json().to_string();
     assert!(
@@ -170,6 +225,14 @@ fn assert_request_contains_realtime_end(request: &responses::ResponsesRequest) {
     assert!(
         body.contains("Reason: inactive"),
         "expected request to use realtime end instructions"
+    );
+}
+
+fn assert_request_omits_realtime_update(request: &responses::ResponsesRequest) {
+    let body = request.body_json().to_string();
+    assert!(
+        !body.contains("<realtime_conversation>"),
+        "did not expect request to contain realtime instructions"
     );
 }
 
@@ -1863,6 +1926,219 @@ async fn snapshot_request_shape_remote_compact_resume_restates_realtime_end() ->
         "remote_compact_resume_restates_realtime_end_shapes",
         format_labeled_requests_snapshot(
             "After remote manual /compact and resume, the first resumed turn rebuilds history from the compaction item and restates realtime-end instructions from reconstructed previous-turn settings.",
+            &[
+                ("Remote Compaction Request", &compact_request),
+                ("Remote Post-Resume History Layout", after_resume_request),
+            ]
+        )
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_remote_resume_uses_latest_same_turn_turn_context_item() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let realtime_server = start_remote_realtime_server().await;
+    let mut builder = remote_realtime_test_codex_builder(&realtime_server);
+    let initial = builder.build(&server).await?;
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    let responses_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "REMOTE_FIRST_REPLY"),
+                responses::ev_completed_with_tokens("r1", 60),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "REMOTE_AFTER_RESUME_REPLY"),
+                responses::ev_completed_with_tokens("r2", 80),
+            ]),
+        ],
+    )
+    .await;
+
+    start_realtime_conversation(initial.codex.as_ref()).await?;
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    initial.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&initial.codex, |ev| {
+        matches!(ev, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let first_turn_context_item = read_rollout_lines(&rollout_path)?
+        .into_iter()
+        .find_map(|line| match line.item {
+            RolloutItem::TurnContext(ctx) => Some(ctx),
+            _ => None,
+        })
+        .expect("rollout should include first-turn context");
+    let mut latest_turn_context_item = first_turn_context_item;
+    latest_turn_context_item.realtime_active = Some(false);
+    rewrite_rollout_with_additional_turn_context(&rollout_path, &[latest_turn_context_item])?;
+
+    let mut resume_builder = remote_realtime_test_codex_builder(&realtime_server);
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    start_realtime_conversation(resumed.codex.as_ref()).await?;
+
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two model requests");
+
+    let initial_request = &requests[0];
+    let after_resume_request = &requests[1];
+    assert_request_contains_realtime_start(after_resume_request);
+
+    insta::assert_snapshot!(
+        "remote_resume_uses_latest_same_turn_turn_context_item_shapes",
+        format_labeled_requests_snapshot(
+            "Resume after a turn with two persisted TurnContext snapshots for the same turn_id: replay should treat the later inactive snapshot as authoritative, so starting realtime again before the resumed turn emits a fresh realtime-start instruction.",
+            &[
+                ("Last Request Before Resume", initial_request),
+                ("Remote Post-Resume History Layout", after_resume_request),
+            ]
+        )
+    );
+
+    close_realtime_conversation(resumed.codex.as_ref()).await?;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_remote_compact_resume_uses_latest_same_turn_turn_context_item()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let realtime_server = start_remote_realtime_server().await;
+    let mut builder = remote_realtime_test_codex_builder(&realtime_server);
+    let initial = builder.build(&server).await?;
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    let responses_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "REMOTE_FIRST_REPLY"),
+                responses::ev_completed_with_tokens("r1", 60),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "REMOTE_AFTER_RESUME_REPLY"),
+                responses::ev_completed_with_tokens("r2", 80),
+            ]),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_json_once(
+        &server,
+        serde_json::json!({
+            "output": compacted_summary_only_output(
+                "REMOTE_RESUME_LATEST_TURN_CONTEXT_SUMMARY"
+            )
+        }),
+    )
+    .await;
+
+    start_realtime_conversation(initial.codex.as_ref()).await?;
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    initial.codex.submit(Op::Compact).await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    initial.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&initial.codex, |ev| {
+        matches!(ev, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let first_turn_context_item = read_rollout_lines(&rollout_path)?
+        .into_iter()
+        .find_map(|line| match line.item {
+            RolloutItem::TurnContext(ctx) => Some(ctx),
+            _ => None,
+        })
+        .expect("rollout should include first-turn context");
+    let mut latest_turn_context_item = first_turn_context_item;
+    latest_turn_context_item.realtime_active = Some(false);
+    rewrite_rollout_with_additional_turn_context(&rollout_path, &[latest_turn_context_item])?;
+
+    let mut resume_builder = remote_realtime_test_codex_builder(&realtime_server);
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two model requests");
+
+    let compact_request = compact_mock.single_request();
+    let after_resume_request = &requests[1];
+    assert_request_omits_realtime_update(after_resume_request);
+
+    insta::assert_snapshot!(
+        "remote_compact_resume_uses_latest_same_turn_turn_context_item_shapes",
+        format_labeled_requests_snapshot(
+            "After /compact and resume, replay should rebuild previous-turn settings from the last TurnContext snapshot within the compacted turn. Here the earlier snapshot was realtime-active but the later same-turn snapshot was inactive, so the resumed request should not emit a stale realtime-end instruction.",
             &[
                 ("Remote Compaction Request", &compact_request),
                 ("Remote Post-Resume History Layout", after_resume_request),

@@ -1,0 +1,25 @@
+---
+source: core/tests/suite/compact_remote.rs
+expression: "format_labeled_requests_snapshot(\"Resume after a turn with two persisted TurnContext snapshots for the same turn_id: replay should treat the later inactive snapshot as authoritative, so starting realtime again before the resumed turn emits a fresh realtime-start instruction.\",\n&[(\"Last Request Before Resume\", initial_request),\n(\"Remote Post-Resume History Layout\", after_resume_request),])"
+---
+Scenario: Resume after a turn with two persisted TurnContext snapshots for the same turn_id: replay should treat the later inactive snapshot as authoritative, so starting realtime again before the resumed turn emits a fresh realtime-start instruction.
+
+## Last Request Before Resume
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/developer:<realtime_conversation>\nRealtime conversation started.\n\nYou a...
+03:message/user:USER_ONE
+
+## Remote Post-Resume History Layout
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/developer:<realtime_conversation>\nRealtime conversation started.\n\nYou a...
+03:message/user:USER_ONE
+04:message/assistant:REMOTE_FIRST_REPLY
+05:message/developer:<realtime_conversation>\nRealtime conversation started.\n\nYou a...
+06:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+07:message/user:USER_TWO

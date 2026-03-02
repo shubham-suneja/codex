@@ -758,6 +758,46 @@ impl TurnContext {
         }
     }
 
+    pub(crate) fn with_realtime_active(&self, realtime_active: bool) -> Self {
+        Self {
+            sub_id: self.sub_id.clone(),
+            realtime_active,
+            config: Arc::clone(&self.config),
+            auth_manager: self.auth_manager.clone(),
+            model_info: self.model_info.clone(),
+            otel_manager: self.otel_manager.clone(),
+            provider: self.provider.clone(),
+            reasoning_effort: self.reasoning_effort,
+            reasoning_summary: self.reasoning_summary,
+            session_source: self.session_source.clone(),
+            cwd: self.cwd.clone(),
+            current_date: self.current_date.clone(),
+            timezone: self.timezone.clone(),
+            app_server_client_name: self.app_server_client_name.clone(),
+            developer_instructions: self.developer_instructions.clone(),
+            compact_prompt: self.compact_prompt.clone(),
+            user_instructions: self.user_instructions.clone(),
+            collaboration_mode: self.collaboration_mode.clone(),
+            personality: self.personality,
+            approval_policy: self.approval_policy.clone(),
+            sandbox_policy: self.sandbox_policy.clone(),
+            network: self.network.clone(),
+            windows_sandbox_level: self.windows_sandbox_level,
+            shell_environment_policy: self.shell_environment_policy.clone(),
+            tools_config: self.tools_config.clone(),
+            features: self.features.clone(),
+            ghost_snapshot: self.ghost_snapshot.clone(),
+            final_output_json_schema: self.final_output_json_schema.clone(),
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            tool_call_gate: Arc::clone(&self.tool_call_gate),
+            truncation_policy: self.truncation_policy,
+            js_repl: Arc::clone(&self.js_repl),
+            dynamic_tools: self.dynamic_tools.clone(),
+            turn_metadata_state: Arc::clone(&self.turn_metadata_state),
+            turn_skills: self.turn_skills.clone(),
+        }
+    }
+
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
             .map(PathBuf::from)
@@ -1982,6 +2022,14 @@ impl Session {
         state.set_previous_turn_settings(previous_turn_settings);
     }
 
+    async fn set_previous_turn_settings_from_turn_context(&self, turn_context: &TurnContext) {
+        self.set_previous_turn_settings(Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        }))
+        .await;
+    }
+
     fn maybe_refresh_shell_snapshot_for_cwd(
         &self,
         previous_cwd: &Path,
@@ -2311,9 +2359,31 @@ impl Session {
             let state = self.state.lock().await;
             state.session_configuration.clone()
         };
+        let realtime_active = self.conversation.running_state().await.is_some();
         let next_turn_context = self
             .build_updated_turn_context(current_turn_context.as_ref(), &session_configuration)
             .await;
+        let next_turn_context = if next_turn_context.realtime_active == realtime_active {
+            next_turn_context
+        } else {
+            Arc::new(next_turn_context.with_realtime_active(realtime_active))
+        };
+        let _ = self
+            .set_current_active_turn_context(next_turn_context)
+            .await;
+    }
+
+    pub(crate) async fn refresh_current_active_turn_context_from_realtime_state(&self) {
+        let Some(current_turn_context) = self.current_active_turn_context().await else {
+            return;
+        };
+        let realtime_active = self.conversation.running_state().await.is_some();
+        if current_turn_context.realtime_active == realtime_active {
+            return;
+        }
+
+        let next_turn_context =
+            Arc::new(current_turn_context.with_realtime_active(realtime_active));
         let _ = self
             .set_current_active_turn_context(next_turn_context)
             .await;
@@ -3327,6 +3397,8 @@ impl Session {
         }
 
         self.record_context_updates_and_set_reference_context_item(turn_context)
+            .await;
+        self.set_previous_turn_settings_from_turn_context(turn_context)
             .await;
     }
 
@@ -5139,11 +5211,8 @@ pub(crate) async fn run_turn(
     // Track the previous-turn baseline from the regular user-turn path only so
     // standalone tasks (compact/shell/review/undo) cannot suppress future
     // model/realtime injections.
-    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-        model: turn_context.model_info.slug.clone(),
-        realtime_active: Some(turn_context.realtime_active),
-    }))
-    .await;
+    sess.set_previous_turn_settings_from_turn_context(turn_context.as_ref())
+        .await;
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
@@ -8913,6 +8982,43 @@ mod tests {
         assert_eq!(updated.model_info.slug, next_model);
         assert_eq!(updated.collaboration_mode.model(), next_model);
         assert!(Arc::ptr_eq(&updated.tool_call_gate, &tc.tool_call_gate));
+    }
+
+    #[tokio::test]
+    async fn maybe_record_context_updates_for_turn_updates_previous_turn_settings_for_mid_turn_realtime_change()
+     {
+        let (session, previous_context) = make_session_and_context().await;
+        {
+            let mut state = session.state.lock().await;
+            state.set_reference_context_item(Some(previous_context.to_turn_context_item()));
+        }
+        session
+            .set_previous_turn_settings_from_turn_context(&previous_context)
+            .await;
+
+        let mut current_context = previous_context
+            .with_model(
+                previous_context.model_info.slug.clone(),
+                &session.services.models_manager,
+            )
+            .await;
+        current_context.realtime_active = true;
+
+        session
+            .maybe_record_context_updates_for_turn(&current_context)
+            .await;
+
+        assert_eq!(
+            session.previous_turn_settings().await,
+            Some(PreviousTurnSettings {
+                model: current_context.model_info.slug.clone(),
+                realtime_active: Some(true),
+            })
+        );
+        assert_eq!(
+            session.reference_context_item().await,
+            Some(current_context.to_turn_context_item())
+        );
     }
 
     #[tokio::test]
