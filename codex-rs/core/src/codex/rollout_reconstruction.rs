@@ -100,6 +100,9 @@ impl Session {
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
         let mut pending_rollback_turns = 0usize;
+        // Default to replaying from the beginning of the rollout. If reverse replay later finds a
+        // surviving compaction with `replacement_history`, it advances this start index to the
+        // first rollout row after that compaction checkpoint.
         let mut rollout_suffix_start = source.start_index();
         // Reverse replay accumulates rollout items into the newest in-progress turn segment until
         // we hit its matching `TurnStarted`, at which point the segment can be finalized.
