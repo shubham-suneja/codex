@@ -5,6 +5,7 @@ use std::fs::{self};
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use chrono::SecondsFormat;
 use codex_protocol::ThreadId;
@@ -16,6 +17,8 @@ use time::format_description::FormatItem;
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::{self};
 use tokio::sync::oneshot;
@@ -72,6 +75,12 @@ pub struct RolloutRecorder {
     pub(crate) rollout_path: PathBuf,
     state_db: Option<StateDbHandle>,
     event_persistence_mode: EventPersistenceMode,
+    // Serialize the in-memory live timeline with the queued writer timeline so concurrent
+    // recorders cannot enqueue in one order and append to `live_items` in a different order.
+    queue_and_live_items_lock: Arc<Mutex<()>>,
+    // Live sanitized rollout items used by rollback/backtracking so reconstruction can read the
+    // same up-to-date item stream that new writes append to, without reparsing the session file.
+    pub(crate) live_items: Arc<RwLock<Vec<RolloutItem>>>,
 }
 
 #[derive(Clone)]
@@ -372,6 +381,7 @@ impl RolloutRecorder {
         state_db_ctx: Option<StateDbHandle>,
         state_builder: Option<ThreadMetadataBuilder>,
     ) -> std::io::Result<Self> {
+        let mut live_items = Vec::new();
         let (file, deferred_log_file_info, rollout_path, meta, event_persistence_mode) =
             match params {
                 RolloutRecorderParams::Create {
@@ -427,18 +437,27 @@ impl RolloutRecorder {
                 RolloutRecorderParams::Resume {
                     path,
                     event_persistence_mode,
-                } => (
-                    Some(
-                        tokio::fs::OpenOptions::new()
-                            .append(true)
-                            .open(&path)
-                            .await?,
-                    ),
-                    None,
-                    path,
-                    None,
-                    event_persistence_mode,
-                ),
+                } => {
+                    live_items = match Self::load_rollout_items(path.as_path()).await {
+                        Ok((items, _, _)) => items,
+                        Err(err) => {
+                            warn!("failed to seed live rollout items from {path:?}: {err}");
+                            Vec::new()
+                        }
+                    };
+                    (
+                        Some(
+                            tokio::fs::OpenOptions::new()
+                                .append(true)
+                                .open(&path)
+                                .await?,
+                        ),
+                        None,
+                        path,
+                        None,
+                        event_persistence_mode,
+                    )
+                }
             };
 
         // Clone the cwd for the spawned task to collect git info asynchronously
@@ -470,6 +489,8 @@ impl RolloutRecorder {
             rollout_path,
             state_db: state_db_ctx,
             event_persistence_mode,
+            queue_and_live_items_lock: Arc::new(Mutex::new(())),
+            live_items: Arc::new(RwLock::new(live_items)),
         })
     }
 
@@ -497,10 +518,13 @@ impl RolloutRecorder {
         if filtered.is_empty() {
             return Ok(());
         }
+        let _queue_and_live_items_guard = self.queue_and_live_items_lock.lock().await;
         self.tx
-            .send(RolloutCmd::AddItems(filtered))
+            .send(RolloutCmd::AddItems(filtered.clone()))
             .await
-            .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))
+            .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))?;
+        self.live_items.write().await.extend(filtered);
+        Ok(())
     }
 
     /// Materialize the rollout file and persist all buffered items.
@@ -1195,6 +1219,69 @@ mod tests {
         );
         let text_after_second_persist = std::fs::read_to_string(&rollout_path)?;
         assert_eq!(text_after_second_persist, text);
+
+        recorder.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recorder_keeps_live_items_order_consistent_with_queue_order() -> std::io::Result<()> {
+        let home = TempDir::new().expect("temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .build()
+            .await?;
+        let recorder = Arc::new(
+            RolloutRecorder::new(
+                &config,
+                RolloutRecorderParams::new(
+                    ThreadId::new(),
+                    None,
+                    SessionSource::Exec,
+                    BaseInstructions::default(),
+                    Vec::new(),
+                    EventPersistenceMode::Limited,
+                ),
+                None,
+                None,
+            )
+            .await?,
+        );
+
+        let user_message_a = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "A".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        }));
+        let user_message_b = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "B".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        }));
+
+        let queue_and_live_items_guard = recorder.queue_and_live_items_lock.lock().await;
+
+        let recorder_a = Arc::clone(&recorder);
+        let user_message_a_for_task = user_message_a.clone();
+        let task_a =
+            tokio::spawn(async move { recorder_a.record_items(&[user_message_a_for_task]).await });
+        tokio::task::yield_now().await;
+
+        let recorder_b = Arc::clone(&recorder);
+        let user_message_b_for_task = user_message_b.clone();
+        let task_b =
+            tokio::spawn(async move { recorder_b.record_items(&[user_message_b_for_task]).await });
+        tokio::task::yield_now().await;
+
+        drop(queue_and_live_items_guard);
+        task_a.await.expect("join task A")?;
+        task_b.await.expect("join task B")?;
+
+        let actual_live_items = serde_json::to_value(&*recorder.live_items.read().await)?;
+        let expected_live_items = serde_json::to_value(vec![user_message_a, user_message_b])?;
+        assert_eq!(actual_live_items, expected_live_items);
 
         recorder.shutdown().await?;
         Ok(())

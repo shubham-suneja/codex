@@ -9,6 +9,95 @@ pub(super) struct RolloutReconstruction {
     pub(super) reference_context_item: Option<TurnContextItem>,
 }
 
+// In-memory implementation of the reverse rollout source used by the current eager caller.
+// When reconstruction switches to lazy on-disk loading, the equivalent source should keep the
+// same "load older items on demand" contract, but page older rollout items from the session file
+// instead of cloning them out of an eagerly loaded `Vec<RolloutItem>`.
+//
+// `-1` is the newest rollout row that already existed when reconstruction state was created.
+// Older persisted rows are more negative, and any rows appended after startup will be `0`, `1`,
+// `2`, and so on. The future file-backed source should expose the same "read older items / replay
+// forward from this location" contract, but can back that location with an opaque file cursor
+// instead of an in-memory signed index.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RolloutIndex(i64);
+
+#[derive(Clone, Debug)]
+struct InMemoryReverseRolloutSource {
+    rollout_items: Vec<RolloutItem>,
+    startup_rollout_len: i64,
+}
+
+impl InMemoryReverseRolloutSource {
+    fn new(rollout_items: Vec<RolloutItem>) -> Self {
+        let startup_rollout_len = match i64::try_from(rollout_items.len()) {
+            Ok(len) => len,
+            Err(_) => panic!("rollout length should fit in i64"),
+        };
+        Self {
+            rollout_items,
+            startup_rollout_len,
+        }
+    }
+
+    fn start_index(&self) -> RolloutIndex {
+        RolloutIndex(-self.startup_rollout_len)
+    }
+
+    fn end_index(&self) -> RolloutIndex {
+        let rollout_len = match i64::try_from(self.rollout_items.len()) {
+            Ok(len) => len,
+            Err(_) => panic!("rollout length should fit in i64"),
+        };
+        RolloutIndex(rollout_len - self.startup_rollout_len)
+    }
+
+    fn iter_forward_from(
+        &self,
+        start: RolloutIndex,
+    ) -> impl Iterator<Item = (RolloutIndex, &RolloutItem)> + '_ {
+        let start = self.actual_index_from_rollout_index(start);
+        self.rollout_items[start..]
+            .iter()
+            .enumerate()
+            .map(move |(offset, item)| {
+                let offset = match i64::try_from(offset) {
+                    Ok(offset) => offset,
+                    Err(_) => panic!("offset should fit in i64"),
+                };
+                (
+                    RolloutIndex(start as i64 + offset - self.startup_rollout_len),
+                    item,
+                )
+            })
+    }
+
+    fn iter_reverse_from(
+        &self,
+        end: RolloutIndex,
+    ) -> impl Iterator<Item = (RolloutIndex, &RolloutItem)> + '_ {
+        let end = self.actual_index_from_rollout_index(end);
+        self.rollout_items[..end]
+            .iter()
+            .enumerate()
+            .rev()
+            .map(move |(actual_index, item)| {
+                let actual_index = match i64::try_from(actual_index) {
+                    Ok(actual_index) => actual_index,
+                    Err(_) => panic!("actual index should fit in i64"),
+                };
+                (RolloutIndex(actual_index - self.startup_rollout_len), item)
+            })
+    }
+
+    fn actual_index_from_rollout_index(&self, rollout_index: RolloutIndex) -> usize {
+        match usize::try_from(rollout_index.0 + self.startup_rollout_len) {
+            Ok(actual_index) => actual_index,
+            Err(_) => panic!("rollout index should map to a loaded rollout row"),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 enum TurnReferenceContextItem {
     /// No `TurnContextItem` has been seen for this replay span yet.
@@ -88,6 +177,7 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> RolloutReconstruction {
+        let source = InMemoryReverseRolloutSource::new(rollout_items.to_vec());
         // Replay metadata should already match the shape of the future lazy reverse loader, even
         // while history materialization still uses an eager bridge. Scan newest-to-oldest,
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
@@ -99,14 +189,12 @@ impl Session {
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
         let mut pending_rollback_turns = 0usize;
-        // Borrowed suffix of rollout items newer than the newest surviving replacement-history
-        // checkpoint. If no such checkpoint exists, this remains the full rollout.
-        let mut rollout_suffix = rollout_items;
+        let mut rollout_suffix_start = source.start_index();
         // Reverse replay accumulates rollout items into the newest in-progress turn segment until
         // we hit its matching `TurnStarted`, at which point the segment can be finalized.
         let mut active_segment: Option<ActiveReplaySegment<'_>> = None;
 
-        for (index, item) in rollout_items.iter().enumerate().rev() {
+        for (index, item) in source.iter_reverse_from(source.end_index()) {
             match item {
                 RolloutItem::Compacted(compacted) => {
                     let active_segment =
@@ -123,7 +211,7 @@ impl Session {
                         && let Some(replacement_history) = &compacted.replacement_history
                     {
                         active_segment.base_replacement_history = Some(replacement_history);
-                        rollout_suffix = &rollout_items[index + 1..];
+                        rollout_suffix_start = RolloutIndex(index.0 + 1);
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
@@ -235,7 +323,7 @@ impl Session {
         // Materialize exact history semantics from the replay-derived suffix. The eventual lazy
         // design should keep this same replay shape, but drive it from a resumable reverse source
         // instead of an eagerly loaded `&[RolloutItem]`.
-        for item in rollout_suffix {
+        for (_, item) in source.iter_forward_from(rollout_suffix_start) {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
                     history.record_items(
