@@ -4,6 +4,7 @@ use std::time::Instant;
 use tracing::error;
 
 use crate::analytics_client::AppInvocation;
+use crate::analytics_client::InvocationType;
 use crate::analytics_client::build_track_events_context;
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -14,6 +15,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
+use crate::state_db;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -120,6 +122,7 @@ pub(crate) async fn handle_mcp_tool_call(
                 });
                 notify_mcp_tool_call_event(sess.as_ref(), turn_context, tool_call_begin_event)
                     .await;
+                maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context).await;
 
                 let start = Instant::now();
                 let result = sess
@@ -188,6 +191,7 @@ pub(crate) async fn handle_mcp_tool_call(
         invocation: invocation.clone(),
     });
     notify_mcp_tool_call_event(sess.as_ref(), turn_context, tool_call_begin_event).await;
+    maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context).await;
 
     let start = Instant::now();
     // Perform the tool call.
@@ -221,6 +225,22 @@ pub(crate) async fn handle_mcp_tool_call(
         .counter("codex.mcp.call", 1, &[("status", status)]);
 
     ResponseInputItem::McpToolCallOutput { call_id, result }
+}
+
+async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
+    if !turn_context
+        .config
+        .memories
+        .no_memories_if_mcp_or_web_search
+    {
+        return;
+    }
+    state_db::mark_thread_memory_mode_polluted(
+        sess.services.state_db.as_deref(),
+        sess.conversation_id,
+        "mcp_tool_call",
+    )
+    .await;
 }
 
 fn sanitize_mcp_tool_result_for_model(
@@ -276,15 +296,15 @@ async fn maybe_track_codex_app_used(
     let (connector_id, app_name) = metadata
         .map(|metadata| (metadata.connector_id, metadata.app_name))
         .unwrap_or((None, None));
-    let invoke_type = if let Some(connector_id) = connector_id.as_deref() {
+    let invocation_type = if let Some(connector_id) = connector_id.as_deref() {
         let mentioned_connector_ids = sess.get_connector_selection().await;
         if mentioned_connector_ids.contains(connector_id) {
-            "explicit"
+            InvocationType::Explicit
         } else {
-            "implicit"
+            InvocationType::Implicit
         }
     } else {
-        "implicit"
+        InvocationType::Implicit
     };
 
     let tracking = build_track_events_context(
@@ -297,7 +317,7 @@ async fn maybe_track_codex_app_used(
         AppInvocation {
             connector_id,
             app_name,
-            invoke_type: Some(invoke_type.to_string()),
+            invocation_type: Some(invocation_type),
         },
     );
 }
