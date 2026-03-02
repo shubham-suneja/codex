@@ -198,6 +198,35 @@
       },
       "type": "object"
     },
+    "ArcMonitorPoliciesToml": {
+      "additionalProperties": false,
+      "properties": {
+        "developer": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ArcMonitorToml": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": {
+          "type": "string"
+        },
+        "policies": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ArcMonitorPoliciesToml"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
@@ -1580,6 +1609,15 @@
       ],
       "default": null,
       "description": "Settings for app-specific controls."
+    },
+    "arc_monitor": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ArcMonitorToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional monitor settings used to preflight high-risk tool calls."
     },
     "audio": {
       "allOf": [

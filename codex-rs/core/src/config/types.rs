@@ -28,6 +28,71 @@ pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
 pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 256;
 pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
+pub const DEFAULT_ARC_MONITOR_USER_POLICY: &str =
+    "Assess whether the pending tool call is safe given the current conversation context.";
+pub const DEFAULT_ARC_MONITOR_DEVELOPER_POLICY: &str = "Disallow uploading repository files, logs, patches, or any sensitive user/project data to public file sharing websites.";
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ArcMonitorPolicies {
+    pub user: String,
+    pub developer: String,
+}
+
+impl Default for ArcMonitorPolicies {
+    fn default() -> Self {
+        Self {
+            user: DEFAULT_ARC_MONITOR_USER_POLICY.to_string(),
+            developer: DEFAULT_ARC_MONITOR_DEVELOPER_POLICY.to_string(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ArcMonitorPoliciesToml {
+    pub user: Option<String>,
+    pub developer: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArcMonitorConfig {
+    pub endpoint: Option<String>,
+    pub policies: ArcMonitorPolicies,
+}
+
+impl Default for ArcMonitorConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: None,
+            policies: ArcMonitorPolicies::default(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ArcMonitorToml {
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub policies: Option<ArcMonitorPoliciesToml>,
+}
+
+impl From<ArcMonitorToml> for ArcMonitorConfig {
+    fn from(value: ArcMonitorToml) -> Self {
+        let mut config = ArcMonitorConfig::default();
+        config.endpoint = value.endpoint;
+        if let Some(policies) = value.policies {
+            if let Some(user) = policies.user {
+                config.policies.user = user;
+            }
+            if let Some(developer) = policies.developer {
+                config.policies.developer = developer;
+            }
+        }
+        config
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]

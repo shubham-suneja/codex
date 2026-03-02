@@ -27,8 +27,13 @@ use crate::protocol::TurnStartedEvent;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::state::TaskKind;
+use crate::tools::arc_monitor::ArcMonitorOutcome;
+use crate::tools::arc_monitor::run_arc_monitor;
+use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolPayload;
 use crate::tools::format_exec_output_str;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::user_shell_command::user_shell_command_record_item;
 
 use super::SessionTask;
@@ -36,6 +41,7 @@ use super::SessionTaskContext;
 use crate::codex::Session;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ShellToolCallParams;
 
 const USER_SHELL_TIMEOUT_MS: u64 = 60 * 60 * 1000; // 1 hour
 
@@ -146,6 +152,83 @@ pub(crate) async fn execute_user_shell_command(
             }),
         )
         .await;
+
+    let monitor_invocation = ToolInvocation {
+        session: Arc::clone(&session),
+        turn: Arc::clone(&turn_context),
+        tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+        call_id: call_id.clone(),
+        tool_name: "user_shell_command".to_string(),
+        payload: ToolPayload::LocalShell {
+            params: ShellToolCallParams {
+                command: display_command.clone(),
+                workdir: Some(cwd.display().to_string()),
+                timeout_ms: Some(USER_SHELL_TIMEOUT_MS),
+                sandbox_permissions: Some(SandboxPermissions::UseDefault),
+                additional_permissions: None,
+                prefix_rule: None,
+                justification: None,
+            },
+        },
+    };
+    let monitor_result = run_arc_monitor(&monitor_invocation).await;
+    let outcome = match monitor_result.outcome {
+        ArcMonitorOutcome::None => "none",
+        ArcMonitorOutcome::InterruptForUser => "interrupt-for-user",
+        ArcMonitorOutcome::InterruptForModel => "interrupt-for-model",
+        ArcMonitorOutcome::InterruptForMonitor => "interrupt-for-monitor",
+    };
+    turn_context
+        .otel_manager
+        .counter("codex.arc_monitor", 1, &[("status", outcome)]);
+    if monitor_result.outcome != ArcMonitorOutcome::None {
+        let message = format!(
+            "command interrupted by monitor ({outcome}, monitor_request_id={}): {}",
+            monitor_result.monitor_request_id, monitor_result.reason
+        );
+        let exec_output = ExecToolCallOutput {
+            exit_code: -1,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(message.clone()),
+            aggregated_output: StreamOutput::new(message.clone()),
+            duration: Duration::ZERO,
+            timed_out: false,
+        };
+        session
+            .send_event(
+                turn_context.as_ref(),
+                EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                    call_id,
+                    process_id: None,
+                    turn_id: turn_context.sub_id.clone(),
+                    command: display_command.clone(),
+                    cwd: cwd.clone(),
+                    parsed_cmd: parsed_cmd.clone(),
+                    source: ExecCommandSource::UserShell,
+                    interaction_input: None,
+                    stdout: String::new(),
+                    stderr: message.clone(),
+                    aggregated_output: message.clone(),
+                    exit_code: exec_output.exit_code,
+                    duration: exec_output.duration,
+                    formatted_output: format_exec_output_str(
+                        &exec_output,
+                        turn_context.truncation_policy,
+                    ),
+                    status: ExecCommandStatus::Failed,
+                }),
+            )
+            .await;
+        persist_user_shell_output(
+            &session,
+            turn_context.as_ref(),
+            &raw_command,
+            &exec_output,
+            mode,
+        )
+        .await;
+        return;
+    }
 
     let sandbox_policy = SandboxPolicy::DangerFullAccess;
     let exec_env = ExecRequest {

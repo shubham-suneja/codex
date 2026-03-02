@@ -9,6 +9,8 @@ use crate::function_tool::FunctionCallError;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
 use crate::sandbox_tags::sandbox_tag;
+use crate::tools::arc_monitor::ArcMonitorOutcome;
+use crate::tools::arc_monitor::run_arc_monitor;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -155,6 +157,47 @@ impl ToolRegistry {
         }
 
         let is_mutating = handler.is_mutating(&invocation).await;
+        let should_run_monitor =
+            should_run_arc_monitor(tool_name.as_str(), &invocation.payload, is_mutating);
+        if should_run_monitor {
+            let monitor_result = run_arc_monitor(&invocation).await;
+            let outcome = arc_monitor_outcome_label(monitor_result.outcome);
+            invocation
+                .turn
+                .otel_manager
+                .counter("codex.arc_monitor", 1, &[("status", outcome)]);
+            if monitor_result.outcome != ArcMonitorOutcome::None {
+                let message = format!(
+                    "tool call interrupted by monitor ({outcome}, monitor_request_id={}): {}",
+                    monitor_result.monitor_request_id, monitor_result.reason
+                );
+                otel.tool_result_with_tags(
+                    tool_name.as_ref(),
+                    &call_id_owned,
+                    log_payload.as_ref(),
+                    Duration::ZERO,
+                    false,
+                    &message,
+                    &metric_tags,
+                    mcp_server_ref,
+                    mcp_server_origin_ref,
+                );
+                emit_metric_for_tool_read(&invocation, false).await;
+                let hook_abort_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
+                    invocation: &invocation,
+                    output_preview: message.clone(),
+                    success: false,
+                    executed: false,
+                    duration: Duration::ZERO,
+                    mutating: is_mutating,
+                })
+                .await;
+                if let Some(err) = hook_abort_error {
+                    return Err(err);
+                }
+                return Err(FunctionCallError::RespondToModel(message));
+            }
+        }
         let output_cell = tokio::sync::Mutex::new(None);
         let invocation_for_tool = invocation.clone();
 
@@ -221,6 +264,50 @@ impl ToolRegistry {
             Err(err) => Err(err),
         }
     }
+}
+
+fn arc_monitor_outcome_label(outcome: ArcMonitorOutcome) -> &'static str {
+    match outcome {
+        ArcMonitorOutcome::None => "none",
+        ArcMonitorOutcome::InterruptForUser => "interrupt-for-user",
+        ArcMonitorOutcome::InterruptForModel => "interrupt-for-model",
+        ArcMonitorOutcome::InterruptForMonitor => "interrupt-for-monitor",
+    }
+}
+
+fn should_run_arc_monitor(tool_name: &str, payload: &ToolPayload, is_mutating: bool) -> bool {
+    if is_mutating {
+        return true;
+    }
+
+    if matches!(
+        tool_name,
+        "shell"
+            | "container.exec"
+            | "local_shell"
+            | "shell_command"
+            | "exec_command"
+            | "unified_exec"
+    ) {
+        return true;
+    }
+
+    tool_name == "write_stdin" && write_stdin_has_non_empty_chars(payload)
+}
+
+fn write_stdin_has_non_empty_chars(payload: &ToolPayload) -> bool {
+    let ToolPayload::Function { arguments } = payload else {
+        return false;
+    };
+
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
+        return true;
+    };
+
+    value
+        .get("chars")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|chars| !chars.trim().is_empty())
 }
 
 #[derive(Debug, Clone)]
@@ -296,6 +383,65 @@ impl ToolRegistryBuilder {
     pub fn build(self) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
         let registry = ToolRegistry::new(self.handlers);
         (self.specs, registry)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn should_run_arc_monitor_for_exec_command_even_when_non_mutating() {
+        let payload = ToolPayload::Function {
+            arguments: serde_json::json!({
+                "cmd": "pwd"
+            })
+            .to_string(),
+        };
+
+        assert_eq!(
+            should_run_arc_monitor("exec_command", &payload, false),
+            true
+        );
+    }
+
+    #[test]
+    fn should_run_arc_monitor_for_write_stdin_with_non_empty_chars() {
+        let payload = ToolPayload::Function {
+            arguments: serde_json::json!({
+                "session_id": 1,
+                "chars": "touch fail\n"
+            })
+            .to_string(),
+        };
+
+        assert_eq!(should_run_arc_monitor("write_stdin", &payload, false), true);
+    }
+
+    #[test]
+    fn should_not_run_arc_monitor_for_write_stdin_poll_only() {
+        let payload = ToolPayload::Function {
+            arguments: serde_json::json!({
+                "session_id": 1,
+                "chars": ""
+            })
+            .to_string(),
+        };
+
+        assert_eq!(
+            should_run_arc_monitor("write_stdin", &payload, false),
+            false
+        );
+    }
+
+    #[test]
+    fn should_run_arc_monitor_for_write_stdin_when_payload_is_not_json() {
+        let payload = ToolPayload::Function {
+            arguments: "not-json".to_string(),
+        };
+
+        assert_eq!(should_run_arc_monitor("write_stdin", &payload, false), true);
     }
 }
 

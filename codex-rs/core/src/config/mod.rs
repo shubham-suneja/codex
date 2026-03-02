@@ -2,6 +2,8 @@ use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::AppsConfigToml;
+use crate::config::types::ArcMonitorConfig;
+use crate::config::types::ArcMonitorToml;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -429,6 +431,9 @@ pub struct Config {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
+
+    /// Optional monitor settings used to preflight high-risk tool calls.
+    pub arc_monitor: ArcMonitorConfig,
 
     /// Machine-local realtime audio device preferences used by realtime voice.
     pub realtime_audio: RealtimeAudioConfig,
@@ -1181,6 +1186,10 @@ pub struct ConfigToml {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
+
+    /// Optional monitor settings used to preflight high-risk tool calls.
+    #[serde(default)]
+    pub arc_monitor: Option<ArcMonitorToml>,
 
     /// Machine-local realtime audio device preferences used by realtime voice.
     #[serde(default)]
@@ -2170,6 +2179,7 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            arc_monitor: cfg.arc_monitor.unwrap_or_default().into(),
             realtime_audio: cfg
                 .audio
                 .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {
@@ -2405,6 +2415,7 @@ mod tests {
     use crate::config::edit::ConfigEdit;
     use crate::config::edit::ConfigEditsBuilder;
     use crate::config::edit::apply_blocking;
+    use crate::config::types::ArcMonitorConfig;
     use crate::config::types::FeedbackConfigToml;
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
@@ -4914,6 +4925,7 @@ model_verbosity = "high"
                 model_verbosity: None,
                 personality: Some(Personality::Pragmatic),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+                arc_monitor: ArcMonitorConfig::default(),
                 realtime_audio: RealtimeAudioConfig::default(),
                 experimental_realtime_ws_base_url: None,
                 experimental_realtime_ws_backend_prompt: None,
@@ -5042,6 +5054,7 @@ model_verbosity = "high"
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            arc_monitor: ArcMonitorConfig::default(),
             realtime_audio: RealtimeAudioConfig::default(),
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_backend_prompt: None,
@@ -5168,6 +5181,7 @@ model_verbosity = "high"
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            arc_monitor: ArcMonitorConfig::default(),
             realtime_audio: RealtimeAudioConfig::default(),
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_backend_prompt: None,
@@ -5280,6 +5294,7 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            arc_monitor: ArcMonitorConfig::default(),
             realtime_audio: RealtimeAudioConfig::default(),
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_backend_prompt: None,
