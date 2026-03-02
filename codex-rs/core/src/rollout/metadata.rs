@@ -101,6 +101,8 @@ pub(crate) async fn extract_metadata_from_rollout(
     // Metadata extraction scans an arbitrary persisted rollout file and currently folds over a
     // complete `&[RolloutItem]`. It deliberately consumes the loaded source into raw items here,
     // while still sharing the same file-parsing entrypoint as replay code.
+    // TODO(ccunningham): once the rollout source itself becomes disk-lazy, stream metadata
+    // extraction directly from that source instead of materializing the full rollout here.
     let items = source.into_items();
     if items.is_empty() {
         return Err(anyhow::anyhow!(
