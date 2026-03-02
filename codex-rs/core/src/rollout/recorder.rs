@@ -18,7 +18,6 @@ use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
-use tokio::sync::RwLock;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::{self};
 use tokio::sync::oneshot;
@@ -75,12 +74,9 @@ pub struct RolloutRecorder {
     pub(crate) rollout_path: PathBuf,
     state_db: Option<StateDbHandle>,
     event_persistence_mode: EventPersistenceMode,
-    // Serialize the in-memory live timeline with the queued writer timeline so concurrent
-    // recorders cannot enqueue in one order and append to `live_items` in a different order.
-    queue_and_live_items_lock: Arc<Mutex<()>>,
     // Live sanitized rollout items used by rollback/backtracking so reconstruction can read the
     // same up-to-date item stream that new writes append to, without reparsing the session file.
-    pub(crate) live_items: Arc<RwLock<Vec<RolloutItem>>>,
+    pub(crate) live_items: Arc<Mutex<Vec<RolloutItem>>>,
 }
 
 #[derive(Clone)]
@@ -489,8 +485,7 @@ impl RolloutRecorder {
             rollout_path,
             state_db: state_db_ctx,
             event_persistence_mode,
-            queue_and_live_items_lock: Arc::new(Mutex::new(())),
-            live_items: Arc::new(RwLock::new(live_items)),
+            live_items: Arc::new(Mutex::new(live_items)),
         })
     }
 
@@ -518,12 +513,12 @@ impl RolloutRecorder {
         if filtered.is_empty() {
             return Ok(());
         }
-        let _queue_and_live_items_guard = self.queue_and_live_items_lock.lock().await;
+        let mut live_items = self.live_items.lock().await;
         self.tx
             .send(RolloutCmd::AddItems(filtered.clone()))
             .await
             .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))?;
-        self.live_items.write().await.extend(filtered);
+        live_items.extend(filtered);
         Ok(())
     }
 
@@ -1261,7 +1256,7 @@ mod tests {
             text_elements: Vec::new(),
         }));
 
-        let queue_and_live_items_guard = recorder.queue_and_live_items_lock.lock().await;
+        let live_items_guard = recorder.live_items.lock().await;
 
         let recorder_a = Arc::clone(&recorder);
         let user_message_a_for_task = user_message_a.clone();
@@ -1275,11 +1270,11 @@ mod tests {
             tokio::spawn(async move { recorder_b.record_items(&[user_message_b_for_task]).await });
         tokio::task::yield_now().await;
 
-        drop(queue_and_live_items_guard);
+        drop(live_items_guard);
         task_a.await.expect("join task A")?;
         task_b.await.expect("join task B")?;
 
-        let actual_live_items = serde_json::to_value(&*recorder.live_items.read().await)?;
+        let actual_live_items = serde_json::to_value(&*recorder.live_items.lock().await)?;
         let expected_live_items = serde_json::to_value(vec![user_message_a, user_message_b])?;
         assert_eq!(actual_live_items, expected_live_items);
 

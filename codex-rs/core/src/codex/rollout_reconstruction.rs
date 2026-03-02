@@ -22,19 +22,19 @@ pub(super) struct RolloutReconstruction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RolloutIndex(i64);
 
-#[derive(Clone, Debug)]
-struct InMemoryReverseRolloutSource {
-    rollout_items: Vec<RolloutItem>,
+#[derive(Debug)]
+struct InMemoryReverseRolloutSource<'a> {
+    rollout_items: &'a [RolloutItem],
     startup_rollout_len: i64,
 }
 
-impl InMemoryReverseRolloutSource {
-    fn new(rollout_items: Vec<RolloutItem>) -> Self {
+impl InMemoryReverseRolloutSource<'_> {
+    fn new(rollout_items: &[RolloutItem]) -> InMemoryReverseRolloutSource<'_> {
         let startup_rollout_len = match i64::try_from(rollout_items.len()) {
             Ok(len) => len,
             Err(_) => panic!("rollout length should fit in i64"),
         };
-        Self {
+        InMemoryReverseRolloutSource {
             rollout_items,
             startup_rollout_len,
         }
@@ -177,7 +177,7 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> RolloutReconstruction {
-        let source = InMemoryReverseRolloutSource::new(rollout_items.to_vec());
+        let source = InMemoryReverseRolloutSource::new(rollout_items);
         // Replay metadata should already match the shape of the future lazy reverse loader, even
         // while history materialization still uses an eager bridge. Scan newest-to-oldest,
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
