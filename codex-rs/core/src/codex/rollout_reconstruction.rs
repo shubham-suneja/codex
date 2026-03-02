@@ -1,4 +1,5 @@
 use super::*;
+use crate::rollout::store::InMemoryRolloutSource;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
@@ -7,101 +8,6 @@ pub(super) struct RolloutReconstruction {
     pub(super) history: Vec<ResponseItem>,
     pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
     pub(super) reference_context_item: Option<TurnContextItem>,
-}
-
-// In-memory implementation of the reverse rollout source used by the current eager caller.
-// When reconstruction switches to lazy on-disk loading, the equivalent source should keep the
-// same "load older items on demand" contract, but page older rollout items from the session file
-// instead of cloning them out of an eagerly loaded `Vec<RolloutItem>`.
-//
-// `-1` is the newest rollout row that already existed when reconstruction state was created.
-// Older persisted rows are more negative, and any rows appended after startup will be `0`, `1`,
-// `2`, and so on. The future file-backed source should expose the same "read older items / replay
-// forward from this location" contract, but can back that location with an opaque file cursor
-// instead of an in-memory signed index.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RolloutIndex(i64);
-
-impl RolloutIndex {
-    fn next_newer(self) -> Self {
-        Self(self.0 + 1)
-    }
-}
-
-#[derive(Debug)]
-struct InMemoryReverseRolloutSource {
-    rollout_items: Vec<RolloutItem>,
-    startup_rollout_len: i64,
-}
-
-impl InMemoryReverseRolloutSource {
-    fn new(rollout_items: Vec<RolloutItem>) -> Self {
-        let startup_rollout_len = match i64::try_from(rollout_items.len()) {
-            Ok(len) => len,
-            Err(_) => panic!("rollout length should fit in i64"),
-        };
-        Self {
-            rollout_items,
-            startup_rollout_len,
-        }
-    }
-
-    fn start_index(&self) -> RolloutIndex {
-        RolloutIndex(-self.startup_rollout_len)
-    }
-
-    fn end_index(&self) -> RolloutIndex {
-        let rollout_len = match i64::try_from(self.rollout_items.len()) {
-            Ok(len) => len,
-            Err(_) => panic!("rollout length should fit in i64"),
-        };
-        RolloutIndex(rollout_len - self.startup_rollout_len)
-    }
-
-    fn iter_forward_from(
-        &self,
-        start: RolloutIndex,
-    ) -> impl Iterator<Item = (RolloutIndex, &RolloutItem)> + '_ {
-        let start = self.actual_index_from_rollout_index(start);
-        self.rollout_items[start..]
-            .iter()
-            .enumerate()
-            .map(move |(offset, item)| {
-                let offset = match i64::try_from(offset) {
-                    Ok(offset) => offset,
-                    Err(_) => panic!("offset should fit in i64"),
-                };
-                (
-                    RolloutIndex(start as i64 + offset - self.startup_rollout_len),
-                    item,
-                )
-            })
-    }
-
-    fn iter_reverse_from(
-        &self,
-        end: RolloutIndex,
-    ) -> impl Iterator<Item = (RolloutIndex, &RolloutItem)> + '_ {
-        let end = self.actual_index_from_rollout_index(end);
-        self.rollout_items[..end]
-            .iter()
-            .enumerate()
-            .rev()
-            .map(move |(actual_index, item)| {
-                let actual_index = match i64::try_from(actual_index) {
-                    Ok(actual_index) => actual_index,
-                    Err(_) => panic!("actual index should fit in i64"),
-                };
-                (RolloutIndex(actual_index - self.startup_rollout_len), item)
-            })
-    }
-
-    fn actual_index_from_rollout_index(&self, rollout_index: RolloutIndex) -> usize {
-        match usize::try_from(rollout_index.0 + self.startup_rollout_len) {
-            Ok(actual_index) => actual_index,
-            Err(_) => panic!("rollout index should map to a loaded rollout row"),
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -181,9 +87,8 @@ impl Session {
     pub(super) async fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
-        rollout_items: Vec<RolloutItem>,
+        source: InMemoryRolloutSource,
     ) -> RolloutReconstruction {
-        let source = InMemoryReverseRolloutSource::new(rollout_items);
         // Replay metadata should already match the shape of the future lazy reverse loader, even
         // while history materialization still uses an eager bridge. Scan newest-to-oldest,
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
@@ -350,8 +255,9 @@ impl Session {
                         // `reference_context_item`, reinject canonical context at the end of the
                         // resumed conversation, and accept the temporary out-of-distribution
                         // prompt shape.
-                        // TODO(ccunningham): if we drop support for None replacement_history compaction items,
-                        // we can get rid of this second loop entirely and just build `history` directly in the first loop.
+                        // If we eventually drop support for legacy compaction items without
+                        // `replacement_history`, this second pass can go away and the first replay
+                        // loop can materialize history directly.
                         let user_messages = collect_user_messages(history.raw_items());
                         let rebuilt = compact::build_compacted_history(
                             Vec::new(),

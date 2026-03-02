@@ -287,7 +287,8 @@ mod job {
         rollout_cwd: &Path,
         stage_one_context: &RequestContext,
     ) -> anyhow::Result<(StageOneOutput, Option<TokenUsage>)> {
-        let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(rollout_path).await?;
+        let (source, _, _) = RolloutRecorder::load_source(rollout_path).await?;
+        let rollout_items = source.into_items();
         let rollout_contents = serialize_filtered_rollout_response_items(&rollout_items)?;
 
         let prompt = Prompt {

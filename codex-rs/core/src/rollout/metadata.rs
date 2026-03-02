@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::rollout;
+use crate::rollout::RolloutRecorder;
 use crate::rollout::list::parse_timestamp_uuid_from_filename;
-use crate::rollout::recorder::RolloutRecorder;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
@@ -97,8 +97,8 @@ pub(crate) async fn extract_metadata_from_rollout(
     default_provider: &str,
     otel: Option<&OtelManager>,
 ) -> anyhow::Result<ExtractionOutcome> {
-    let (items, _thread_id, parse_errors) =
-        RolloutRecorder::load_rollout_items(rollout_path).await?;
+    let (source, _thread_id, parse_errors) = RolloutRecorder::load_source(rollout_path).await?;
+    let items = source.into_items();
     if items.is_empty() {
         return Err(anyhow::anyhow!(
             "empty session file: {}",
