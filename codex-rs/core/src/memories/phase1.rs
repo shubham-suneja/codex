@@ -288,6 +288,10 @@ mod job {
         stage_one_context: &RequestContext,
     ) -> anyhow::Result<(StageOneOutput, Option<TokenUsage>)> {
         let (source, _, _) = RolloutRecorder::load_source(rollout_path).await?;
+        // Memory extraction summarizes an arbitrary persisted rollout by path, not the active
+        // in-process session state. This stage still wants the full stored transcript payload, so
+        // it intentionally flattens the loaded source into raw items after going through the same
+        // rollout parsing path as reconstruction.
         let rollout_items = source.into_items();
         let rollout_contents = serialize_filtered_rollout_response_items(&rollout_items)?;
 

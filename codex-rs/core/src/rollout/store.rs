@@ -720,6 +720,9 @@ impl RolloutStore {
         let (source, thread_id, _parse_errors) = Self::load_source(path).await?;
         let conversation_id = thread_id
             .ok_or_else(|| IoError::other("failed to parse thread ID from rollout file"))?;
+        // `InitialHistory::Resumed` still carries an owned `Vec<RolloutItem>`, so this is the
+        // boundary where the store's canonical source snapshot is flattened back into the
+        // protocol-owned rollout payload for resume/fork startup.
         let items = source.into_items();
 
         if items.is_empty() {

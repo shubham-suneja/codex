@@ -98,6 +98,9 @@ pub(crate) async fn extract_metadata_from_rollout(
     otel: Option<&OtelManager>,
 ) -> anyhow::Result<ExtractionOutcome> {
     let (source, _thread_id, parse_errors) = RolloutRecorder::load_source(rollout_path).await?;
+    // Metadata extraction scans an arbitrary persisted rollout file and currently folds over a
+    // complete `&[RolloutItem]`. It deliberately consumes the loaded source into raw items here,
+    // while still sharing the same file-parsing entrypoint as replay code.
     let items = source.into_items();
     if items.is_empty() {
         return Err(anyhow::anyhow!(
