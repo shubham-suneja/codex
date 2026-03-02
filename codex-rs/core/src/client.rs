@@ -90,6 +90,7 @@ use crate::auth::RefreshTokenError;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::client_common::rewrite_image_generation_calls_for_stateless_input;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
@@ -522,7 +523,8 @@ impl ModelClientSession {
         summary: ReasoningSummaryConfig,
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
-        let input = prompt.get_formatted_input();
+        let store = provider.is_azure_responses_endpoint();
+        let input = Self::prepare_responses_input(store, prompt.get_formatted_input());
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let default_reasoning_effort = model_info.default_reasoning_level;
         let reasoning = if model_info.supports_reasoning_summaries {
@@ -566,7 +568,7 @@ impl ModelClientSession {
             tool_choice: "auto".to_string(),
             parallel_tool_calls: prompt.parallel_tool_calls,
             reasoning,
-            store: provider.is_azure_responses_endpoint(),
+            store,
             stream: true,
             include,
             prompt_cache_key,
@@ -587,7 +589,6 @@ impl ModelClientSession {
     ) -> ApiResponsesOptions {
         let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
         let conversation_id = self.client.state.conversation_id.to_string();
-
         ApiResponsesOptions {
             conversation_id: Some(conversation_id),
             session_source: Some(self.client.state.session_source.clone()),
@@ -688,6 +689,14 @@ impl ModelClientSession {
                     client_metadata: payload.client_metadata,
                 })
             }
+        }
+    }
+
+    fn prepare_responses_input(store: bool, input: Vec<ResponseItem>) -> Vec<ResponseItem> {
+        if store {
+            input
+        } else {
+            rewrite_image_generation_calls_for_stateless_input(input)
         }
     }
 

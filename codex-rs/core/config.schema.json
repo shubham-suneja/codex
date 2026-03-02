@@ -349,6 +349,9 @@
             "experimental_windows_sandbox": {
               "type": "boolean"
             },
+            "image_generation": {
+              "type": "boolean"
+            },
             "include_apply_patch_tool": {
               "type": "boolean"
             },
@@ -1718,6 +1721,9 @@
           "type": "boolean"
         },
         "experimental_windows_sandbox": {
+          "type": "boolean"
+        },
+        "image_generation": {
           "type": "boolean"
         },
         "include_apply_patch_tool": {
