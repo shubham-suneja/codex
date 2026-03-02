@@ -696,6 +696,16 @@ fn file_link_ignores_label_when_rendering_visible_target() {
 }
 
 #[test]
+fn file_link_outside_cwd_stays_absolute() {
+    let text = render_markdown_text_for_cwd(
+        "[ignored label](/Users/example/other-repo/src/main.rs:12)",
+        Path::new("/Users/example/code/codex"),
+    );
+    let expected = Text::from(Line::from_iter(["/Users/example/other-repo/src/main.rs:12".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
 fn file_link_normalizes_hash_anchor_for_terminal_clickability() {
     let text = render_markdown_text_for_cwd(
         "[markdown_render.rs](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3)",

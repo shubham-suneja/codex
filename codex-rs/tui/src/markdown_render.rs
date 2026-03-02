@@ -1,4 +1,3 @@
-use crate::diff_render::display_path_for;
 use crate::render::highlight::highlight_code_to_lines;
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
@@ -147,7 +146,10 @@ fn local_link_display_text(dest_url: &str, cwd: Option<&Path>) -> Option<String>
     let (path, location_suffix) = split_local_link_destination(dest_url)?;
     let display_path = cwd.map_or_else(
         || path.display().to_string(),
-        |cwd| display_path_for(&path, cwd),
+        |cwd| match path.strip_prefix(cwd) {
+            Ok(stripped) => stripped.display().to_string(),
+            Err(_) => path.display().to_string(),
+        },
     );
     Some(format!("{display_path}{location_suffix}"))
 }
