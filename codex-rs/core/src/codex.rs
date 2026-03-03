@@ -1808,19 +1808,29 @@ impl Session {
                 let (reconstructed_rollout, restored_tool_selection, token_info) =
                     if resumed_history.history.is_empty() {
                         let rollout = self.services.rollout.lock().await;
-                        let rollout = match rollout.as_ref() {
-                            Some(rollout) => rollout,
-                            None => panic!("resumed session should have a rollout store"),
-                        };
-                        rollout
-                            .with_source(|source| {
-                                (
-                                    self.reconstruct_history_from_rollout(&turn_context, source),
-                                    Self::extract_mcp_tool_selection_from_rollout_source(source),
-                                    Self::last_token_info_from_rollout_source(source),
-                                )
-                            })
-                            .await
+                        if let Some(rollout) = rollout.as_ref() {
+                            rollout
+                                .with_source(|source| {
+                                    (
+                                        self.reconstruct_history_from_rollout(
+                                            &turn_context,
+                                            source,
+                                        ),
+                                        Self::extract_mcp_tool_selection_from_rollout_source(
+                                            source,
+                                        ),
+                                        Self::last_token_info_from_rollout_source(source),
+                                    )
+                                })
+                                .await
+                        } else {
+                            let source = InMemoryRolloutSource::new(Vec::new());
+                            (
+                                self.reconstruct_history_from_rollout(&turn_context, &source),
+                                Self::extract_mcp_tool_selection_from_rollout_source(&source),
+                                Self::last_token_info_from_rollout_source(&source),
+                            )
+                        }
                     } else {
                         let rollout_items = resumed_history.history;
                         let source = InMemoryRolloutSource::new(rollout_items);
@@ -7403,6 +7413,97 @@ mod tests {
         .expect("create ephemeral resumed session");
 
         assert_eq!(expected, session.clone_history().await.raw_items());
+    }
+
+    #[tokio::test]
+    async fn session_new_ephemeral_resume_with_empty_history_does_not_panic() {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(codex_home.path()).await;
+        config.ephemeral = true;
+        let config = Arc::new(config);
+
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let models_manager = Arc::new(ModelsManager::new(
+            config.codex_home.clone(),
+            auth_manager.clone(),
+            None,
+            CollaborationModesConfig::default(),
+        ));
+        let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
+        let collaboration_mode = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model,
+                reasoning_effort: config.model_reasoning_effort,
+                developer_instructions: None,
+            },
+        };
+        let session_configuration = SessionConfiguration {
+            provider: config.model_provider.clone(),
+            collaboration_mode,
+            model_reasoning_summary: config.model_reasoning_summary,
+            developer_instructions: config.developer_instructions.clone(),
+            user_instructions: config.user_instructions.clone(),
+            personality: config.personality,
+            base_instructions: config
+                .base_instructions
+                .clone()
+                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            compact_prompt: config.compact_prompt.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
+            windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+            cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
+            original_config_do_not_use: Arc::clone(&config),
+            service_tier: config.service_tier,
+            metrics_service_name: None,
+            app_server_client_name: None,
+            session_source: SessionSource::Exec,
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            inherited_shell_snapshot: None,
+        };
+
+        let (tx_event, _rx_event) = async_channel::unbounded();
+        let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+        let skills_manager = Arc::new(SkillsManager::new(
+            config.codex_home.clone(),
+            Arc::clone(&plugins_manager),
+        ));
+        let session = Session::new(
+            session_configuration,
+            Arc::clone(&config),
+            auth_manager,
+            models_manager,
+            ExecPolicyManager::default(),
+            tx_event,
+            agent_status_tx,
+            InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: Vec::new(),
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }),
+            SessionSource::Exec,
+            skills_manager,
+            plugins_manager,
+            mcp_manager,
+            Arc::new(FileWatcher::noop()),
+            AgentControl::default(),
+        )
+        .await
+        .expect("create ephemeral resumed session with empty history");
+
+        assert_eq!(
+            Vec::<ResponseItem>::new(),
+            session.clone_history().await.raw_items()
+        );
     }
 
     #[tokio::test]
