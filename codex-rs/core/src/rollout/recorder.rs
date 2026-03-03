@@ -79,7 +79,7 @@ impl RolloutIndex {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct InMemoryRolloutSource {
+pub struct InMemoryRolloutSource {
     rollout_items: Vec<RolloutItem>,
     startup_rollout_len: i64,
 }
