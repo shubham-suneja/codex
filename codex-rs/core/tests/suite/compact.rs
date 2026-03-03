@@ -495,6 +495,91 @@ async fn manual_compact_uses_custom_prompt() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compact_keeps_real_user_message_matching_compact_prompt() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let first_turn = sse(vec![
+        ev_assistant_message("m0", FIRST_REPLY),
+        ev_completed_with_tokens("r0", 80),
+    ]);
+    let compact_turn = sse(vec![
+        ev_assistant_message("m1", SUMMARY_TEXT),
+        ev_completed_with_tokens("r1", 100),
+    ]);
+    let follow_up_turn = sse(vec![
+        ev_assistant_message("m2", FINAL_REPLY),
+        ev_completed_with_tokens("r2", 120),
+    ]);
+    let request_log =
+        mount_sse_sequence(&server, vec![first_turn, compact_turn, follow_up_turn]).await;
+
+    let compact_prompt = "real user message that matches compact prompt";
+    let follow_up_message = "after compact";
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        config.compact_prompt = Some(compact_prompt.to_string());
+    });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: compact_prompt.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.expect("trigger compact");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: follow_up_message.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit follow-up turn");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected first turn, compact, and follow-up requests"
+    );
+
+    let follow_up_user_texts = requests[2].message_input_texts("user");
+    let compact_prompt_occurrences = follow_up_user_texts
+        .iter()
+        .filter(|text| text.as_str() == compact_prompt)
+        .count();
+    assert_eq!(
+        compact_prompt_occurrences, 1,
+        "post-compaction history should preserve the real user message that matches the compact prompt exactly once"
+    );
+    assert!(
+        follow_up_user_texts
+            .iter()
+            .any(|text| text.as_str() == follow_up_message),
+        "follow-up request should include the new user message"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn manual_compact_emits_api_and_local_token_usage_events() {
     skip_if_no_network!();
 
