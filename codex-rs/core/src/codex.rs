@@ -1195,18 +1195,23 @@ impl Session {
                     ),
                 )
             }
-            InitialHistory::Resumed(resumed_history) => {
-                let resumed_source =
-                    InMemoryRolloutSource::new(std::mem::take(&mut resumed_history.history));
-                (
-                    resumed_history.conversation_id,
+            InitialHistory::Resumed(resumed_history) => (
+                resumed_history.conversation_id,
+                if config.ephemeral {
+                    RolloutStoreParams::resume(
+                        resumed_history.rollout_path.clone(),
+                        event_persistence_mode,
+                    )
+                } else {
+                    let resumed_source =
+                        InMemoryRolloutSource::new(std::mem::take(&mut resumed_history.history));
                     RolloutStoreParams::resume_with_source(
                         resumed_history.rollout_path.clone(),
                         event_persistence_mode,
                         resumed_source,
-                    ),
-                )
-            }
+                    )
+                },
+            ),
         };
 
         // Kick off independent async setup tasks in parallel to reduce startup latency.
@@ -7306,6 +7311,96 @@ mod tests {
 
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
+    }
+
+    #[tokio::test]
+    async fn session_new_ephemeral_resume_keeps_in_memory_history() {
+        let (seed_session, turn_context) = make_session_and_context().await;
+        let (rollout_items, expected) = sample_rollout(&seed_session, &turn_context).await;
+
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(codex_home.path()).await;
+        config.ephemeral = true;
+        let config = Arc::new(config);
+
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let models_manager = Arc::new(ModelsManager::new(
+            config.codex_home.clone(),
+            auth_manager.clone(),
+            None,
+            CollaborationModesConfig::default(),
+        ));
+        let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
+        let collaboration_mode = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model,
+                reasoning_effort: config.model_reasoning_effort,
+                developer_instructions: None,
+            },
+        };
+        let session_configuration = SessionConfiguration {
+            provider: config.model_provider.clone(),
+            collaboration_mode,
+            model_reasoning_summary: config.model_reasoning_summary,
+            developer_instructions: config.developer_instructions.clone(),
+            user_instructions: config.user_instructions.clone(),
+            personality: config.personality,
+            base_instructions: config
+                .base_instructions
+                .clone()
+                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            compact_prompt: config.compact_prompt.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
+            windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+            cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
+            original_config_do_not_use: Arc::clone(&config),
+            metrics_service_name: None,
+            app_server_client_name: None,
+            session_source: SessionSource::Exec,
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            inherited_shell_snapshot: None,
+        };
+
+        let (tx_event, _rx_event) = async_channel::unbounded();
+        let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+        let skills_manager = Arc::new(SkillsManager::new(
+            config.codex_home.clone(),
+            Arc::clone(&plugins_manager),
+        ));
+        let session = Session::new(
+            session_configuration,
+            Arc::clone(&config),
+            auth_manager,
+            models_manager,
+            ExecPolicyManager::default(),
+            tx_event,
+            agent_status_tx,
+            InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }),
+            SessionSource::Exec,
+            skills_manager,
+            plugins_manager,
+            mcp_manager,
+            Arc::new(FileWatcher::noop()),
+            AgentControl::default(),
+        )
+        .await
+        .expect("create ephemeral resumed session");
+
+        assert_eq!(expected, session.clone_history().await.raw_items());
     }
 
     #[tokio::test]
