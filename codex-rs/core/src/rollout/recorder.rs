@@ -552,7 +552,7 @@ impl RolloutStore {
                     };
                     let session_meta_line = SessionMetaLine {
                         meta: session_meta,
-                        git: collect_git_info(&config.cwd).await,
+                        git: None,
                     };
 
                     (
@@ -1003,13 +1003,17 @@ async fn rollout_writer(
 #[allow(clippy::too_many_arguments)]
 async fn write_session_meta(
     mut writer: Option<&mut JsonlWriter>,
-    session_meta_line: SessionMetaLine,
+    mut session_meta_line: SessionMetaLine,
     rollout_path: &Path,
     state_db_ctx: Option<&StateRuntime>,
     state_builder: &mut Option<ThreadMetadataBuilder>,
     default_provider: &str,
     generate_memories: bool,
 ) -> std::io::Result<()> {
+    if session_meta_line.git.is_none() {
+        session_meta_line.git = collect_git_info(&session_meta_line.meta.cwd).await;
+    }
+
     if state_db_ctx.is_some() {
         *state_builder = metadata::builder_from_session_meta(&session_meta_line, rollout_path);
     }
