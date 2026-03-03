@@ -357,6 +357,8 @@ impl ThreadManager {
         rollout_path: PathBuf,
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewThread> {
+        // Resume still expects an eager `InitialHistory`; switch this to a source-backed startup
+        // input once rollout resume itself goes lazy.
         let initial_history = RolloutStore::get_rollout_history(&rollout_path).await?;
         self.resume_thread_with_history(config, initial_history, auth_manager, false)
             .await
@@ -409,6 +411,8 @@ impl ThreadManager {
         path: PathBuf,
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
+        // Fork truncation still operates on an owned `InitialHistory`, so this eagerly loads the
+        // rollout until fork startup can consume a source-backed history input.
         let history = RolloutStore::get_rollout_history(&path).await?;
         let history = truncate_before_nth_user_message(history, nth_user_message);
         self.state
@@ -516,6 +520,8 @@ impl ThreadManagerState {
         session_source: SessionSource,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<NewThread> {
+        // This follows the same eager resume boundary as `resume_thread_from_rollout`; move both
+        // callsites together once startup can accept a lazy rollout source.
         let initial_history = RolloutStore::get_rollout_history(&rollout_path).await?;
         self.spawn_thread_with_source(
             config,
