@@ -3426,9 +3426,9 @@ impl CodexMessageProcessor {
             }
         };
 
-        // App-server currently asks `codex-core` for an eager `InitialHistory` before starting
-        // the thread. The rollout parsing still lives in core; this callsite only reflects the
-        // current eager startup interface.
+        // App-server should not need direct rollout-file access. This call still goes through
+        // core's eager `InitialHistory` startup interface, so app-server asks `codex-core` to
+        // materialize the rollout before thread startup.
         match RolloutStore::get_rollout_history(&rollout_path).await {
             Ok(initial_history) => Some(initial_history),
             Err(err) => {
@@ -4453,8 +4453,9 @@ impl CodexMessageProcessor {
         } = params;
 
         let thread_history = if let Some(path) = path {
-            // This mirrors the same eager startup boundary as the CLI thread manager path:
-            // app-server requests an owned `InitialHistory` from core before startup.
+            // App-server should not need direct rollout-file access. This mirrors the same eager
+            // startup boundary as the CLI thread manager path: app-server asks `codex-core` to
+            // materialize an owned `InitialHistory` before startup.
             match RolloutStore::get_rollout_history(&path).await {
                 Ok(initial_history) => initial_history,
                 Err(err) => {
@@ -4471,8 +4472,9 @@ impl CodexMessageProcessor {
                 .await
             {
                 Ok(Some(found_path)) => {
-                    // Conversation-id lookup resolves to the same eager `InitialHistory` startup
-                    // path as direct-path resume; the rollout load itself still lives in core.
+                    // App-server should not need direct rollout-file access. Conversation-id
+                    // lookup resolves to the same eager `InitialHistory` startup path as
+                    // direct-path resume, so core still materializes the rollout here.
                     match RolloutStore::get_rollout_history(&found_path).await {
                         Ok(initial_history) => initial_history,
                         Err(err) => {
