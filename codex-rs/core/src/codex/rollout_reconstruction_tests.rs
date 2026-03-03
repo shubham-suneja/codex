@@ -218,9 +218,10 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
         )),
     ];
 
-    let reconstructed = session
-        .reconstruct_history_from_rollout(&turn_context, InMemoryRolloutSource::new(rollout_items))
-        .await;
+    let reconstructed = session.reconstruct_history_from_rollout(
+        &turn_context,
+        &InMemoryRolloutSource::new(rollout_items),
+    );
 
     assert_eq!(
         reconstructed.history,
@@ -300,9 +301,10 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_inc
         )),
     ];
 
-    let reconstructed = session
-        .reconstruct_history_from_rollout(&turn_context, InMemoryRolloutSource::new(rollout_items))
-        .await;
+    let reconstructed = session.reconstruct_history_from_rollout(
+        &turn_context,
+        &InMemoryRolloutSource::new(rollout_items),
+    );
 
     assert_eq!(
         reconstructed.history,
@@ -406,9 +408,10 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
         )),
     ];
 
-    let reconstructed = session
-        .reconstruct_history_from_rollout(&turn_context, InMemoryRolloutSource::new(rollout_items))
-        .await;
+    let reconstructed = session.reconstruct_history_from_rollout(
+        &turn_context,
+        &InMemoryRolloutSource::new(rollout_items),
+    );
 
     assert_eq!(
         reconstructed.history,
@@ -467,9 +470,10 @@ async fn reconstruct_history_rollback_clears_history_and_metadata_when_exceeding
         )),
     ];
 
-    let reconstructed = session
-        .reconstruct_history_from_rollout(&turn_context, InMemoryRolloutSource::new(rollout_items))
-        .await;
+    let reconstructed = session.reconstruct_history_from_rollout(
+        &turn_context,
+        &InMemoryRolloutSource::new(rollout_items),
+    );
 
     assert_eq!(reconstructed.history, Vec::new());
     assert_eq!(reconstructed.previous_turn_settings, None);
@@ -673,9 +677,10 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_does_
         }),
     ];
 
-    let reconstructed = session
-        .reconstruct_history_from_rollout(&turn_context, InMemoryRolloutSource::new(rollout_items))
-        .await;
+    let reconstructed = session.reconstruct_history_from_rollout(
+        &turn_context,
+        &InMemoryRolloutSource::new(rollout_items),
+    );
 
     assert_eq!(
         reconstructed.history,
@@ -726,9 +731,10 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_clear
         )),
     ];
 
-    let reconstructed = session
-        .reconstruct_history_from_rollout(&turn_context, InMemoryRolloutSource::new(rollout_items))
-        .await;
+    let reconstructed = session.reconstruct_history_from_rollout(
+        &turn_context,
+        &InMemoryRolloutSource::new(rollout_items),
+    );
 
     assert!(reconstructed.reference_context_item.is_none());
 }

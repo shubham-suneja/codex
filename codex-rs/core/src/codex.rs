@@ -1142,7 +1142,7 @@ impl Session {
         exec_policy: ExecPolicyManager,
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
-        initial_history: InitialHistory,
+        mut initial_history: InitialHistory,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
@@ -1164,7 +1164,13 @@ impl Session {
 
         let forked_from_id = initial_history.forked_from_id();
 
-        let (conversation_id, rollout_params) = match &initial_history {
+        let event_persistence_mode = if session_configuration.persist_extended_history {
+            EventPersistenceMode::Extended
+        } else {
+            EventPersistenceMode::Limited
+        };
+
+        let (conversation_id, rollout_params) = match &mut initial_history {
             InitialHistory::New | InitialHistory::Forked(_) => {
                 let conversation_id = ThreadId::default();
                 (
@@ -1177,25 +1183,22 @@ impl Session {
                             text: session_configuration.base_instructions.clone(),
                         },
                         session_configuration.dynamic_tools.clone(),
-                        if session_configuration.persist_extended_history {
-                            EventPersistenceMode::Extended
-                        } else {
-                            EventPersistenceMode::Limited
-                        },
+                        event_persistence_mode,
                     ),
                 )
             }
-            InitialHistory::Resumed(resumed_history) => (
-                resumed_history.conversation_id,
-                RolloutStoreParams::resume(
-                    resumed_history.rollout_path.clone(),
-                    if session_configuration.persist_extended_history {
-                        EventPersistenceMode::Extended
-                    } else {
-                        EventPersistenceMode::Limited
-                    },
-                ),
-            ),
+            InitialHistory::Resumed(resumed_history) => {
+                let resumed_source =
+                    InMemoryRolloutSource::new(std::mem::take(&mut resumed_history.history));
+                (
+                    resumed_history.conversation_id,
+                    RolloutStoreParams::resume_with_source(
+                        resumed_history.rollout_path.clone(),
+                        event_persistence_mode,
+                        resumed_source,
+                    ),
+                )
+            }
         };
         let state_builder = match &initial_history {
             InitialHistory::Resumed(resumed) => metadata::builder_from_items(
@@ -1795,17 +1798,30 @@ impl Session {
                 }
             }
             InitialHistory::Resumed(resumed_history) => {
-                let rollout_items = resumed_history.history;
-                let restored_tool_selection =
-                    Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
-                let token_info = Self::last_token_info_from_rollout(&rollout_items);
-
-                let reconstructed_rollout = self
-                    .reconstruct_history_from_rollout(
-                        &turn_context,
-                        InMemoryRolloutSource::new(rollout_items),
-                    )
-                    .await;
+                let (reconstructed_rollout, restored_tool_selection, token_info) =
+                    if resumed_history.history.is_empty() {
+                        let rollout = self.services.rollout.read().await;
+                        let rollout = rollout
+                            .as_ref()
+                            .expect("resumed session should have a rollout store");
+                        rollout
+                            .with_source(|source| {
+                                (
+                                    self.reconstruct_history_from_rollout(&turn_context, source),
+                                    Self::extract_mcp_tool_selection_from_rollout_source(source),
+                                    Self::last_token_info_from_rollout_source(source),
+                                )
+                            })
+                            .await
+                    } else {
+                        let rollout_items = resumed_history.history;
+                        let source = InMemoryRolloutSource::new(rollout_items);
+                        (
+                            self.reconstruct_history_from_rollout(&turn_context, &source),
+                            Self::extract_mcp_tool_selection_from_rollout_source(&source),
+                            Self::last_token_info_from_rollout_source(&source),
+                        )
+                    };
                 let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
                 self.set_previous_turn_settings(previous_turn_settings.clone())
                     .await;
@@ -1868,12 +1884,9 @@ impl Session {
                     self.persist_rollout_items(&rollout_items).await;
                 }
 
-                let reconstructed_rollout = self
-                    .reconstruct_history_from_rollout(
-                        &turn_context,
-                        InMemoryRolloutSource::new(rollout_items),
-                    )
-                    .await;
+                let source = InMemoryRolloutSource::new(rollout_items);
+                let reconstructed_rollout =
+                    self.reconstruct_history_from_rollout(&turn_context, &source);
                 self.set_previous_turn_settings(
                     reconstructed_rollout.previous_turn_settings.clone(),
                 )
@@ -1922,20 +1935,24 @@ impl Session {
         }
     }
 
-    fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
-        rollout_items.iter().rev().find_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
-            _ => None,
-        })
+    fn last_token_info_from_rollout_source(
+        source: &InMemoryRolloutSource,
+    ) -> Option<TokenUsageInfo> {
+        source
+            .iter_reverse_from(source.end_index())
+            .find_map(|(_, item)| match item {
+                RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
+                _ => None,
+            })
     }
 
-    fn extract_mcp_tool_selection_from_rollout(
-        rollout_items: &[RolloutItem],
+    fn extract_mcp_tool_selection_from_rollout_source(
+        source: &InMemoryRolloutSource,
     ) -> Option<Vec<String>> {
         let mut search_call_ids = HashSet::new();
         let mut active_selected_tools: Option<Vec<String>> = None;
 
-        for item in rollout_items {
+        for (_, item) in source.iter_forward_from(source.start_index()) {
             let RolloutItem::ResponseItem(response_item) = item else {
                 continue;
             };
@@ -7219,12 +7236,10 @@ mod tests {
         let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
 
         let reconstruction_turn = session.new_default_turn().await;
-        let reconstructed = session
-            .reconstruct_history_from_rollout(
-                reconstruction_turn.as_ref(),
-                InMemoryRolloutSource::new(rollout_items),
-            )
-            .await;
+        let reconstructed = session.reconstruct_history_from_rollout(
+            reconstruction_turn.as_ref(),
+            &InMemoryRolloutSource::new(rollout_items),
+        );
 
         assert_eq!(expected, reconstructed.history);
     }
@@ -7258,12 +7273,10 @@ mod tests {
             replacement_history: Some(replacement_history.clone()),
         })];
 
-        let reconstructed = session
-            .reconstruct_history_from_rollout(
-                &turn_context,
-                InMemoryRolloutSource::new(rollout_items),
-            )
-            .await;
+        let reconstructed = session.reconstruct_history_from_rollout(
+            &turn_context,
+            &InMemoryRolloutSource::new(rollout_items),
+        );
 
         assert_eq!(reconstructed.history, replacement_history);
     }

@@ -84,10 +84,10 @@ fn finalize_active_segment<'a>(
 }
 
 impl Session {
-    pub(super) async fn reconstruct_history_from_rollout(
+    pub(super) fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
-        source: InMemoryRolloutSource,
+        source: &InMemoryRolloutSource,
     ) -> RolloutReconstruction {
         // Replay metadata should already match the shape of the future lazy reverse loader, even
         // while history materialization still uses an eager bridge. Scan newest-to-oldest,

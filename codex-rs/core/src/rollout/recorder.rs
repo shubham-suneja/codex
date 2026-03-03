@@ -249,6 +249,7 @@ pub enum RolloutStoreParams {
     Resume {
         path: PathBuf,
         event_persistence_mode: EventPersistenceMode,
+        source: Option<InMemoryRolloutSource>,
     },
 }
 
@@ -289,6 +290,19 @@ impl RolloutStoreParams {
         Self::Resume {
             path,
             event_persistence_mode,
+            source: None,
+        }
+    }
+
+    pub fn resume_with_source(
+        path: PathBuf,
+        event_persistence_mode: EventPersistenceMode,
+        source: InMemoryRolloutSource,
+    ) -> Self {
+        Self::Resume {
+            path,
+            event_persistence_mode,
+            source: Some(source),
         }
     }
 }
@@ -602,13 +616,17 @@ impl RolloutStore {
                 RolloutStoreParams::Resume {
                     path,
                     event_persistence_mode,
+                    source,
                 } => {
-                    let source = match Self::load_source(path.as_path()).await {
-                        Ok((source, _, _)) => source,
-                        Err(err) => {
-                            warn!("failed to seed rollout source from {path:?}: {err}");
-                            InMemoryRolloutSource::new(Vec::new())
-                        }
+                    let source = match source {
+                        Some(source) => source,
+                        None => match Self::load_source(path.as_path()).await {
+                            Ok((source, _, _)) => source,
+                            Err(err) => {
+                                warn!("failed to seed rollout source from {path:?}: {err}");
+                                InMemoryRolloutSource::new(Vec::new())
+                            }
+                        },
                     };
                     (
                         Some(
@@ -662,6 +680,14 @@ impl RolloutStore {
     #[cfg(test)]
     async fn source_snapshot(&self) -> InMemoryRolloutSource {
         self.source.lock().await.clone()
+    }
+
+    pub(crate) async fn with_source<T>(
+        &self,
+        inspect: impl FnOnce(&InMemoryRolloutSource) -> T,
+    ) -> T {
+        let source = self.source.lock().await;
+        inspect(&source)
     }
 
     pub fn state_db(&self) -> Option<StateDbHandle> {
