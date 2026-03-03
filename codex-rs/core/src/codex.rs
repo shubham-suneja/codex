@@ -1802,9 +1802,10 @@ impl Session {
                 let (reconstructed_rollout, restored_tool_selection, token_info) =
                     if resumed_history.history.is_empty() {
                         let rollout = self.services.rollout.lock().await;
-                        let rollout = rollout
-                            .as_ref()
-                            .expect("resumed session should have a rollout store");
+                        let rollout = match rollout.as_ref() {
+                            Some(rollout) => rollout,
+                            None => panic!("resumed session should have a rollout store"),
+                        };
                         rollout
                             .with_source(|source| {
                                 (
