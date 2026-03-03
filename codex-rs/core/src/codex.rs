@@ -7361,6 +7361,7 @@ mod tests {
             codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
+            service_tier: config.service_tier,
             metrics_service_name: None,
             app_server_client_name: None,
             session_source: SessionSource::Exec,
