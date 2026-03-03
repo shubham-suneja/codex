@@ -30,7 +30,6 @@ use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::ArchiveConversationResponse;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode;
-use codex_app_server_protocol::AuthStatusChangeNotification;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
@@ -81,11 +80,7 @@ use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LoginApiKeyParams;
-use codex_app_server_protocol::LoginApiKeyResponse;
-use codex_app_server_protocol::LoginChatGptCompleteNotification;
-use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
-use codex_app_server_protocol::LogoutChatGptResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
@@ -114,7 +109,6 @@ use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
-use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
 use codex_app_server_protocol::SkillsConfigWriteParams;
@@ -713,19 +707,8 @@ impl CodexMessageProcessor {
                 self.review_start(to_connection_request_id(request_id), params)
                     .await;
             }
-            ClientRequest::NewConversation { request_id, params } => {
-                // Do not tokio::spawn() to process new_conversation()
-                // asynchronously because we need to ensure the conversation is
-                // created before processing any subsequent messages.
-                self.process_new_conversation(to_connection_request_id(request_id), params)
-                    .await;
-            }
             ClientRequest::GetConversationSummary { request_id, params } => {
                 self.get_thread_summary(to_connection_request_id(request_id), params)
-                    .await;
-            }
-            ClientRequest::ListConversations { request_id, params } => {
-                self.handle_list_conversations(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ModelList { request_id, params } => {
@@ -789,98 +772,12 @@ impl CodexMessageProcessor {
                 self.get_account(to_connection_request_id(request_id), params)
                     .await;
             }
-            ClientRequest::ResumeConversation { request_id, params } => {
-                self.handle_resume_conversation(to_connection_request_id(request_id), params)
-                    .await;
-            }
-            ClientRequest::ForkConversation { request_id, params } => {
-                self.handle_fork_conversation(to_connection_request_id(request_id), params)
-                    .await;
-            }
-            ClientRequest::ArchiveConversation { request_id, params } => {
-                self.archive_conversation(to_connection_request_id(request_id), params)
-                    .await;
-            }
-            ClientRequest::SendUserMessage { request_id, params } => {
-                self.send_user_message(
-                    to_connection_request_id(request_id),
-                    params,
-                    app_server_client_name.clone(),
-                )
-                .await;
-            }
-            ClientRequest::SendUserTurn { request_id, params } => {
-                self.send_user_turn(
-                    to_connection_request_id(request_id),
-                    params,
-                    app_server_client_name.clone(),
-                )
-                .await;
-            }
-            ClientRequest::InterruptConversation { request_id, params } => {
-                self.interrupt_conversation(to_connection_request_id(request_id), params)
-                    .await;
-            }
-            ClientRequest::AddConversationListener { request_id, params } => {
-                self.add_conversation_listener(to_connection_request_id(request_id), params)
-                    .await;
-            }
-            ClientRequest::RemoveConversationListener { request_id, params } => {
-                self.remove_thread_listener(to_connection_request_id(request_id), params)
-                    .await;
-            }
             ClientRequest::GitDiffToRemote { request_id, params } => {
                 self.git_diff_to_origin(to_connection_request_id(request_id), params.cwd)
                     .await;
             }
-            ClientRequest::LoginApiKey { request_id, params } => {
-                self.login_api_key_v1(to_connection_request_id(request_id), params)
-                    .await;
-            }
-            ClientRequest::LoginChatGpt {
-                request_id,
-                params: _,
-            } => {
-                self.login_chatgpt_v1(to_connection_request_id(request_id))
-                    .await;
-            }
-            ClientRequest::CancelLoginChatGpt { request_id, params } => {
-                self.cancel_login_chatgpt(to_connection_request_id(request_id), params.login_id)
-                    .await;
-            }
-            ClientRequest::LogoutChatGpt {
-                request_id,
-                params: _,
-            } => {
-                self.logout_v1(to_connection_request_id(request_id)).await;
-            }
             ClientRequest::GetAuthStatus { request_id, params } => {
                 self.get_auth_status(to_connection_request_id(request_id), params)
-                    .await;
-            }
-            ClientRequest::GetUserSavedConfig {
-                request_id,
-                params: _,
-            } => {
-                self.get_user_saved_config(to_connection_request_id(request_id))
-                    .await;
-            }
-            ClientRequest::SetDefaultModel { request_id, params } => {
-                self.set_default_model(to_connection_request_id(request_id), params)
-                    .await;
-            }
-            ClientRequest::GetUserAgent {
-                request_id,
-                params: _,
-            } => {
-                self.get_user_agent(to_connection_request_id(request_id))
-                    .await;
-            }
-            ClientRequest::UserInfo {
-                request_id,
-                params: _,
-            } => {
-                self.get_user_info(to_connection_request_id(request_id))
                     .await;
             }
             ClientRequest::FuzzyFileSearch { request_id, params } => {
@@ -901,10 +798,6 @@ impl CodexMessageProcessor {
             }
             ClientRequest::OneOffCommandExec { request_id, params } => {
                 self.exec_one_off_command(to_connection_request_id(request_id), params)
-                    .await;
-            }
-            ClientRequest::ExecOneOffCommand { request_id, params } => {
-                self.exec_one_off_command(to_connection_request_id(request_id), params.into())
                     .await;
             }
             ClientRequest::ConfigRead { .. }
@@ -1011,34 +904,6 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn login_api_key_v1(
-        &mut self,
-        request_id: ConnectionRequestId,
-        params: LoginApiKeyParams,
-    ) {
-        match self.login_api_key_common(&params).await {
-            Ok(()) => {
-                self.outgoing
-                    .send_response(request_id, LoginApiKeyResponse {})
-                    .await;
-
-                let payload = AuthStatusChangeNotification {
-                    auth_method: self
-                        .auth_manager
-                        .auth_cached()
-                        .as_ref()
-                        .map(CodexAuth::api_auth_mode),
-                };
-                self.outgoing
-                    .send_server_notification(ServerNotification::AuthStatusChange(payload))
-                    .await;
-            }
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-            }
-        }
-    }
-
     async fn login_api_key_v2(
         &mut self,
         request_id: ConnectionRequestId,
@@ -1099,115 +964,6 @@ impl CodexMessageProcessor {
                 config.cli_auth_credentials_store_mode,
             )
         })
-    }
-
-    // Deprecated in favor of login_chatgpt_v2.
-    async fn login_chatgpt_v1(&mut self, request_id: ConnectionRequestId) {
-        match self.login_chatgpt_common().await {
-            Ok(opts) => match run_login_server(opts) {
-                Ok(server) => {
-                    let login_id = Uuid::new_v4();
-                    let shutdown_handle = server.cancel_handle();
-
-                    // Replace active login if present.
-                    {
-                        let mut guard = self.active_login.lock().await;
-                        if let Some(existing) = guard.take() {
-                            drop(existing);
-                        }
-                        *guard = Some(ActiveLogin {
-                            shutdown_handle: shutdown_handle.clone(),
-                            login_id,
-                        });
-                    }
-
-                    // Spawn background task to monitor completion.
-                    let outgoing_clone = self.outgoing.clone();
-                    let active_login = self.active_login.clone();
-                    let auth_manager = self.auth_manager.clone();
-                    let cloud_requirements = self.cloud_requirements.clone();
-                    let chatgpt_base_url = self.config.chatgpt_base_url.clone();
-                    let codex_home = self.config.codex_home.clone();
-                    let cli_overrides = self.cli_overrides.clone();
-                    let auth_url = server.auth_url.clone();
-                    tokio::spawn(async move {
-                        let (success, error_msg) = match tokio::time::timeout(
-                            LOGIN_CHATGPT_TIMEOUT,
-                            server.block_until_done(),
-                        )
-                        .await
-                        {
-                            Ok(Ok(())) => (true, None),
-                            Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
-                            Err(_elapsed) => {
-                                shutdown_handle.shutdown();
-                                (false, Some("Login timed out".to_string()))
-                            }
-                        };
-
-                        let payload = LoginChatGptCompleteNotification {
-                            login_id,
-                            success,
-                            error: error_msg.clone(),
-                        };
-                        outgoing_clone
-                            .send_server_notification(ServerNotification::LoginChatGptComplete(
-                                payload,
-                            ))
-                            .await;
-
-                        if success {
-                            auth_manager.reload();
-                            replace_cloud_requirements_loader(
-                                cloud_requirements.as_ref(),
-                                auth_manager.clone(),
-                                chatgpt_base_url,
-                                codex_home,
-                            );
-                            sync_default_client_residency_requirement(
-                                &cli_overrides,
-                                cloud_requirements.as_ref(),
-                            )
-                            .await;
-
-                            // Notify clients with the actual current auth mode.
-                            let current_auth_method = auth_manager
-                                .auth_cached()
-                                .as_ref()
-                                .map(CodexAuth::api_auth_mode);
-                            let payload = AuthStatusChangeNotification {
-                                auth_method: current_auth_method,
-                            };
-                            outgoing_clone
-                                .send_server_notification(ServerNotification::AuthStatusChange(
-                                    payload,
-                                ))
-                                .await;
-                        }
-
-                        // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
-                        let mut guard = active_login.lock().await;
-                        if guard.as_ref().map(|l| l.login_id) == Some(login_id) {
-                            *guard = None;
-                        }
-                    });
-
-                    let response = LoginChatGptResponse { login_id, auth_url };
-                    self.outgoing.send_response(request_id, response).await;
-                }
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("failed to start login server: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                }
-            },
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-            }
-        }
     }
 
     async fn login_chatgpt_v2(&mut self, request_id: ConnectionRequestId) {
@@ -1493,26 +1249,6 @@ impl CodexMessageProcessor {
             .auth_cached()
             .as_ref()
             .map(CodexAuth::api_auth_mode))
-    }
-
-    async fn logout_v1(&mut self, request_id: ConnectionRequestId) {
-        match self.logout_common().await {
-            Ok(current_auth_method) => {
-                self.outgoing
-                    .send_response(request_id, LogoutChatGptResponse {})
-                    .await;
-
-                let payload = AuthStatusChangeNotification {
-                    auth_method: current_auth_method,
-                };
-                self.outgoing
-                    .send_server_notification(ServerNotification::AuthStatusChange(payload))
-                    .await;
-            }
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-            }
-        }
     }
 
     async fn logout_v2(&mut self, request_id: ConnectionRequestId) {
@@ -4632,20 +4368,6 @@ impl CodexMessageProcessor {
                         return;
                     }
                 };
-                self.outgoing
-                    .send_server_notification(ServerNotification::SessionConfigured(
-                        SessionConfiguredNotification {
-                            session_id: session_configured.session_id,
-                            model: session_configured.model.clone(),
-                            service_tier: session_configured.service_tier,
-                            reasoning_effort: session_configured.reasoning_effort,
-                            history_log_id: session_configured.history_log_id,
-                            history_entry_count: session_configured.history_entry_count,
-                            initial_messages: session_configured.initial_messages.clone(),
-                            rollout_path: rollout_path.clone(),
-                        },
-                    ))
-                    .await;
                 let initial_messages = session_configured
                     .initial_messages
                     .map(|msgs| msgs.into_iter().collect());
@@ -4854,20 +4576,6 @@ impl CodexMessageProcessor {
             }
         };
 
-        self.outgoing
-            .send_server_notification(ServerNotification::SessionConfigured(
-                SessionConfiguredNotification {
-                    session_id: session_configured.session_id,
-                    model: session_configured.model.clone(),
-                    service_tier: session_configured.service_tier,
-                    reasoning_effort: session_configured.reasoning_effort,
-                    history_log_id: session_configured.history_log_id,
-                    history_entry_count: session_configured.history_entry_count,
-                    initial_messages: session_configured.initial_messages.clone(),
-                    rollout_path: rollout_path.clone(),
-                },
-            ))
-            .await;
         let initial_messages = session_configured
             .initial_messages
             .map(|msgs| msgs.into_iter().collect());
