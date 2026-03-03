@@ -135,13 +135,15 @@ pub(crate) async fn extract_metadata_from_rollout(
     }
     Ok(ExtractionOutcome {
         metadata,
-        memory_mode: items.iter().rev().find_map(|item| match item {
-            RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
-            RolloutItem::ResponseItem(_)
-            | RolloutItem::Compacted(_)
-            | RolloutItem::TurnContext(_)
-            | RolloutItem::EventMsg(_) => None,
-        }),
+        memory_mode: source.iter_reverse_from(source.end_index()).find_map(
+            |(_, item)| match item {
+                RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
+                RolloutItem::ResponseItem(_)
+                | RolloutItem::Compacted(_)
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => None,
+            },
+        ),
         parse_errors,
     })
 }
