@@ -99,54 +99,7 @@ impl InMemoryRolloutSource {
     pub(crate) async fn load_from_path(
         path: &Path,
     ) -> std::io::Result<(Self, Option<ThreadId>, usize)> {
-        trace!("Resuming rollout from {path:?}");
-        let text = tokio::fs::read_to_string(path).await?;
-        if text.trim().is_empty() {
-            return Err(IoError::other("empty session file"));
-        }
-
-        let mut items: Vec<RolloutItem> = Vec::new();
-        let mut thread_id: Option<ThreadId> = None;
-        let mut parse_errors = 0usize;
-        for line in text.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let v: Value = match serde_json::from_str(line) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("failed to parse line as JSON: {line:?}, error: {e}");
-                    parse_errors = parse_errors.saturating_add(1);
-                    continue;
-                }
-            };
-
-            match serde_json::from_value::<RolloutLine>(v.clone()) {
-                Ok(rollout_line) => match rollout_line.item {
-                    RolloutItem::SessionMeta(session_meta_line) => {
-                        if thread_id.is_none() {
-                            thread_id = Some(session_meta_line.meta.id);
-                        }
-                        items.push(RolloutItem::SessionMeta(session_meta_line));
-                    }
-                    RolloutItem::ResponseItem(item) => items.push(RolloutItem::ResponseItem(item)),
-                    RolloutItem::Compacted(item) => items.push(RolloutItem::Compacted(item)),
-                    RolloutItem::TurnContext(item) => items.push(RolloutItem::TurnContext(item)),
-                    RolloutItem::EventMsg(event) => items.push(RolloutItem::EventMsg(event)),
-                },
-                Err(e) => {
-                    trace!("failed to parse rollout line: {e}");
-                    parse_errors = parse_errors.saturating_add(1);
-                }
-            }
-        }
-
-        tracing::debug!(
-            "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
-            items.len(),
-            thread_id,
-            parse_errors,
-        );
+        let (items, thread_id, parse_errors) = RolloutStore::load_rollout_items(path).await?;
         Ok((Self::new(items), thread_id, parse_errors))
     }
 
@@ -335,6 +288,62 @@ fn sanitize_rollout_item_for_persistence(
 }
 
 impl RolloutStore {
+    // TODO(ccunningham): once rollout startup is fully `RolloutSource`-backed, move this parser
+    // under the source implementation and delete the legacy `Vec<RolloutItem>` wrapper.
+    pub(crate) async fn load_rollout_items(
+        path: &Path,
+    ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
+        trace!("Resuming rollout from {path:?}");
+        let text = tokio::fs::read_to_string(path).await?;
+        if text.trim().is_empty() {
+            return Err(IoError::other("empty session file"));
+        }
+
+        let mut items: Vec<RolloutItem> = Vec::new();
+        let mut thread_id: Option<ThreadId> = None;
+        let mut parse_errors = 0usize;
+        for line in text.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let v: Value = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("failed to parse line as JSON: {line:?}, error: {e}");
+                    parse_errors = parse_errors.saturating_add(1);
+                    continue;
+                }
+            };
+
+            match serde_json::from_value::<RolloutLine>(v.clone()) {
+                Ok(rollout_line) => match rollout_line.item {
+                    RolloutItem::SessionMeta(session_meta_line) => {
+                        if thread_id.is_none() {
+                            thread_id = Some(session_meta_line.meta.id);
+                        }
+                        items.push(RolloutItem::SessionMeta(session_meta_line));
+                    }
+                    RolloutItem::ResponseItem(item) => items.push(RolloutItem::ResponseItem(item)),
+                    RolloutItem::Compacted(item) => items.push(RolloutItem::Compacted(item)),
+                    RolloutItem::TurnContext(item) => items.push(RolloutItem::TurnContext(item)),
+                    RolloutItem::EventMsg(event) => items.push(RolloutItem::EventMsg(event)),
+                },
+                Err(e) => {
+                    trace!("failed to parse rollout line: {e}");
+                    parse_errors = parse_errors.saturating_add(1);
+                }
+            }
+        }
+
+        tracing::debug!(
+            "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
+            items.len(),
+            thread_id,
+            parse_errors,
+        );
+        Ok((items, thread_id, parse_errors))
+    }
+
     pub(crate) async fn load_source(
         path: &Path,
     ) -> std::io::Result<(InMemoryRolloutSource, Option<ThreadId>, usize)> {
