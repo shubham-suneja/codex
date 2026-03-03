@@ -412,7 +412,7 @@ impl ThreadManager {
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         // Fork truncation still operates on an owned `InitialHistory`, so this eagerly loads the
-        // rollout until fork startup can consume a source-backed history input.
+        // rollout until fork startup can consume a `RolloutSource`-backed history input.
         let history = RolloutStore::get_rollout_history(&path).await?;
         let history = truncate_before_nth_user_message(history, nth_user_message);
         self.state

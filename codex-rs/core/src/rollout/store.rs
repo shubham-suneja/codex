@@ -724,7 +724,7 @@ impl RolloutStore {
         // boundary where the store's canonical source snapshot is flattened back into the
         // protocol-owned rollout payload for resume/fork startup.
         // TODO(ccunningham): when resume startup becomes lazy, replace this eager
-        // `InitialHistory::Resumed` materialization with a source-backed history input.
+        // `InitialHistory::Resumed` materialization with a `RolloutSource`-backed history input.
         let items = source.into_items();
 
         if items.is_empty() {
