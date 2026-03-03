@@ -1671,11 +1671,22 @@ impl Config {
     }
 
     pub(crate) fn load_config_with_layer_stack(
-        cfg: ConfigToml,
+        mut cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: PathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
+        if let Some(user_layer) = config_layer_stack.get_user_layer()
+            && let Ok(user_cfg) = user_layer.config.clone().try_into()
+        {
+            let user_cfg: ConfigToml = user_cfg;
+            if let Some(user_trace_exporter) = user_cfg.otel.and_then(|otel| otel.trace_exporter) {
+                cfg.otel
+                    .get_or_insert_with(OtelConfigToml::default)
+                    .trace_exporter = Some(user_trace_exporter);
+            }
+        }
+
         let requirements = config_layer_stack.requirements().clone();
         let user_instructions = Self::load_instructions(Some(&codex_home));
         let mut startup_warnings = Vec::new();
@@ -2427,6 +2438,7 @@ mod tests {
     use crate::config::types::ModelAvailabilityNuxConfig;
     use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
+    use crate::config::types::OtelHttpProtocol;
     use crate::config_loader::RequirementSource;
     use crate::features::Feature;
     use codex_config::CONFIG_TOML_FILE;
@@ -6092,6 +6104,68 @@ trust_level = "untrusted"
         );
         Ok(())
     }
+
+    #[test]
+    fn user_otel_trace_exporter_overrides_managed_layer() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let user_file =
+            AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home.path())?;
+        let user_config: TomlValue = toml::from_str(
+            r#"
+[otel.trace_exporter.otlp-http]
+endpoint = "https://otlp.datadoghq.com/v1/traces"
+protocol = "binary"
+
+[otel.trace_exporter.otlp-http.headers]
+dd-api-key = "test-key"
+"#,
+        )
+        .expect("user config should parse");
+        let managed_config: TomlValue = toml::from_str(
+            r#"
+[otel]
+trace_exporter = "none"
+"#,
+        )
+        .expect("managed config should parse");
+        let config_layer_stack = crate::config_loader::ConfigLayerStack::new(
+            vec![
+                crate::config_loader::ConfigLayerEntry::new(
+                    codex_app_server_protocol::ConfigLayerSource::User {
+                        file: user_file.clone(),
+                    },
+                    user_config,
+                ),
+                crate::config_loader::ConfigLayerEntry::new(
+                    codex_app_server_protocol::ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
+                    managed_config,
+                ),
+            ],
+            crate::config_loader::ConfigRequirements::default(),
+            crate::config_loader::ConfigRequirementsToml::default(),
+        )
+        .expect("config layer stack");
+
+        let config = Config::load_config_with_layer_stack(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+            config_layer_stack,
+        )?;
+
+        assert_eq!(
+            config.otel.trace_exporter,
+            OtelExporterKind::OtlpHttp {
+                endpoint: "https://otlp.datadoghq.com/v1/traces".to_string(),
+                headers: HashMap::from([("dd-api-key".to_string(), "test-key".to_string())]),
+                protocol: OtelHttpProtocol::Binary,
+                tls: None,
+            }
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn experimental_realtime_ws_base_url_loads_from_config_toml() -> std::io::Result<()> {
         let cfg: ConfigToml = toml::from_str(

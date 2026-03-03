@@ -158,6 +158,7 @@ ctor = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }
 insta = { workspace = true }
 maplit = { workspace = true }
+opentelemetry = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = [
@@ -166,6 +167,7 @@ opentelemetry_sdk = { workspace = true, features = [
 ] }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }
 walkdir = { workspace = true }
