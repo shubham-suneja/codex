@@ -27,6 +27,7 @@ pub struct ToolInvocation {
     pub session: Arc<Session>,
     pub turn: Arc<TurnContext>,
     pub tracker: SharedTurnDiffTracker,
+    pub source: ToolCallSource,
     pub call_id: String,
     pub tool_name: String,
     pub payload: ToolPayload,

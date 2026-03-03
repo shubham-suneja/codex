@@ -53,6 +53,7 @@ pub use spreadsheet_artifact::SpreadsheetArtifactHandler;
 pub use test_sync::TestSyncHandler;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
+pub(crate) use view_image::output_image_detail_for_turn;
 
 fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
 where

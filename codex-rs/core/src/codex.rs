@@ -9801,6 +9801,7 @@ mod tests {
                 session: Arc::clone(&session),
                 turn: Arc::clone(&turn_context),
                 tracker: Arc::clone(&turn_diff_tracker),
+                source: crate::tools::context::ToolCallSource::Direct,
                 call_id,
                 tool_name: tool_name.to_string(),
                 payload: ToolPayload::Function {
@@ -9840,6 +9841,7 @@ mod tests {
                 session: Arc::clone(&session),
                 turn: Arc::clone(&turn_context),
                 tracker: Arc::clone(&turn_diff_tracker),
+                source: crate::tools::context::ToolCallSource::Direct,
                 call_id: "test-call-2".to_string(),
                 tool_name: tool_name.to_string(),
                 payload: ToolPayload::Function {
@@ -9901,6 +9903,7 @@ mod tests {
                 session: Arc::clone(&session),
                 turn: Arc::clone(&turn_context),
                 tracker: Arc::clone(&tracker),
+                source: crate::tools::context::ToolCallSource::Direct,
                 call_id: "exec-call".to_string(),
                 tool_name: "exec_command".to_string(),
                 payload: ToolPayload::Function {

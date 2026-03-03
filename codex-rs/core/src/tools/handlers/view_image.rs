@@ -13,6 +13,7 @@ use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::EventMsg;
 use crate::protocol::ViewImageToolCallEvent;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -59,6 +60,17 @@ fn supports_original_resolution_model(slug: &str) -> bool {
     (major, minor) >= MIN_ORIGINAL_RESOLUTION_MODEL_VERSION
 }
 
+pub(crate) fn output_image_detail_for_turn(
+    turn: &crate::codex::TurnContext,
+) -> Option<ImageDetail> {
+    (turn
+        .config
+        .features
+        .enabled(Feature::ViewImageOriginalResolution)
+        && supports_original_resolution_model(&turn.model_info.slug))
+    .then_some(ImageDetail::Original)
+}
+
 #[async_trait]
 impl ToolHandler for ViewImageHandler {
     fn kind(&self) -> ToolKind {
@@ -81,6 +93,7 @@ impl ToolHandler for ViewImageHandler {
             session,
             turn,
             payload,
+            source,
             call_id,
             ..
         } = invocation;
@@ -113,20 +126,11 @@ impl ToolHandler for ViewImageHandler {
         }
         let event_path = abs_path.clone();
 
-        let use_original_resolution = turn
-            .config
-            .features
-            .enabled(Feature::ViewImageOriginalResolution)
-            && supports_original_resolution_model(&turn.model_info.slug);
-        let image_mode = if use_original_resolution {
+        let image_detail = output_image_detail_for_turn(turn.as_ref());
+        let image_mode = if image_detail == Some(ImageDetail::Original) {
             PromptImageMode::Original
         } else {
             PromptImageMode::ResizeToFit
-        };
-        let image_detail = if use_original_resolution {
-            Some(ImageDetail::Original)
-        } else {
-            None
         };
 
         let content = local_image_content_items_with_label_number(&abs_path, None, image_mode)
@@ -147,15 +151,17 @@ impl ToolHandler for ViewImageHandler {
             })
             .collect();
 
-        session
-            .send_event(
-                turn.as_ref(),
-                EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
-                    call_id,
-                    path: event_path,
-                }),
-            )
-            .await;
+        if source == ToolCallSource::Direct {
+            session
+                .send_event(
+                    turn.as_ref(),
+                    EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
+                        call_id,
+                        path: event_path,
+                    }),
+                )
+                .await;
+        }
 
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::ContentItems(content),
