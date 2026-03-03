@@ -1,0 +1,4 @@
+#!/bin/bash
+# Example hook: fires when a git commit is made
+cat > /tmp/codex-hook-commit.json
+echo "[hook] commit fired at $(date)" >> /tmp/codex-hooks.log

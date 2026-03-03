@@ -1,0 +1,4 @@
+#!/bin/bash
+# Example hook: fires when agent is waiting for input
+cat > /tmp/codex-hook-notification.json
+echo "[hook] notification fired at $(date)" >> /tmp/codex-hooks.log

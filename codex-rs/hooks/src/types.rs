@@ -144,6 +144,60 @@ where
     serializer.serialize_str(&value.to_rfc3339_opts(SecondsFormat::Secs, true))
 }
 
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventBeforeToolUse {
+    pub turn_id: String,
+    pub call_id: String,
+    pub tool_name: String,
+    pub tool_kind: HookToolKind,
+    pub tool_input: HookToolInput,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventPrompt {
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub input_messages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventStop {
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_commit: Option<String>,
+    pub dirty_files: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventNotification {
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventCommit {
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub hash: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventSessionEnd {
+    pub thread_id: ThreadId,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event_type", rename_all = "snake_case")]
 pub enum HookEvent {
@@ -154,6 +208,30 @@ pub enum HookEvent {
     AfterToolUse {
         #[serde(flatten)]
         event: HookEventAfterToolUse,
+    },
+    BeforeToolUse {
+        #[serde(flatten)]
+        event: HookEventBeforeToolUse,
+    },
+    Prompt {
+        #[serde(flatten)]
+        event: HookEventPrompt,
+    },
+    Stop {
+        #[serde(flatten)]
+        event: HookEventStop,
+    },
+    Notification {
+        #[serde(flatten)]
+        event: HookEventNotification,
+    },
+    Commit {
+        #[serde(flatten)]
+        event: HookEventCommit,
+    },
+    SessionEnd {
+        #[serde(flatten)]
+        event: HookEventSessionEnd,
     },
 }
 

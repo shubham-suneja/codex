@@ -5,15 +5,26 @@ use crate::types::HookEvent;
 use crate::types::HookPayload;
 use crate::types::HookResponse;
 
+
 #[derive(Default, Clone)]
 pub struct HooksConfig {
     pub legacy_notify_argv: Option<Vec<String>>,
+    /// Directory to scan for hook scripts. If None, auto-discovery is used.
+    pub hooks_dir: Option<std::path::PathBuf>,
+    /// Current working directory, used for hook directory discovery.
+    pub cwd: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone)]
 pub struct Hooks {
     after_agent: Vec<Hook>,
     after_tool_use: Vec<Hook>,
+    before_tool_use: Vec<Hook>,
+    prompt: Vec<Hook>,
+    stop: Vec<Hook>,
+    notification: Vec<Hook>,
+    commit: Vec<Hook>,
+    session_end: Vec<Hook>,
 }
 
 impl Default for Hooks {
@@ -26,15 +37,51 @@ impl Default for Hooks {
 // executed after specific events in the Codex lifecycle.
 impl Hooks {
     pub fn new(config: HooksConfig) -> Self {
-        let after_agent = config
+        let mut after_agent: Vec<Hook> = config
             .legacy_notify_argv
             .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
             .map(crate::notify_hook)
             .into_iter()
             .collect();
+        let mut after_tool_use = Vec::new();
+        let mut before_tool_use = Vec::new();
+        let mut prompt = Vec::new();
+        let mut stop = Vec::new();
+        let mut notification = Vec::new();
+        let mut commit = Vec::new();
+        let mut session_end = Vec::new();
+
+        // Discover file-based hooks
+        let hooks_dir = config.hooks_dir.or_else(|| {
+            config.cwd.as_deref()
+                .and_then(crate::file_hooks::find_hooks_dir)
+        });
+
+        if let Some(dir) = hooks_dir {
+            for (event_name, hooks) in crate::file_hooks::discover_hooks(&dir) {
+                match event_name.as_str() {
+                    "after_agent" => after_agent.extend(hooks),
+                    "after_tool_use" => after_tool_use.extend(hooks),
+                    "before_tool_use" => before_tool_use.extend(hooks),
+                    "prompt" => prompt.extend(hooks),
+                    "stop" => stop.extend(hooks),
+                    "notification" => notification.extend(hooks),
+                    "commit" => commit.extend(hooks),
+                    "session_end" => session_end.extend(hooks),
+                    _ => {}
+                }
+            }
+        }
+
         Self {
             after_agent,
-            after_tool_use: Vec::new(),
+            after_tool_use,
+            before_tool_use,
+            prompt,
+            stop,
+            notification,
+            commit,
+            session_end,
         }
     }
 
@@ -42,6 +89,12 @@ impl Hooks {
         match hook_event {
             HookEvent::AfterAgent { .. } => &self.after_agent,
             HookEvent::AfterToolUse { .. } => &self.after_tool_use,
+            HookEvent::BeforeToolUse { .. } => &self.before_tool_use,
+            HookEvent::Prompt { .. } => &self.prompt,
+            HookEvent::Stop { .. } => &self.stop,
+            HookEvent::Notification { .. } => &self.notification,
+            HookEvent::Commit { .. } => &self.commit,
+            HookEvent::SessionEnd { .. } => &self.session_end,
         }
     }
 

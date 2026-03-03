@@ -1,0 +1,4 @@
+#!/bin/bash
+# Example hook: fires when agent stops responding
+cat > /tmp/codex-hook-stop.json
+echo "[hook] stop fired at $(date)" >> /tmp/codex-hooks.log

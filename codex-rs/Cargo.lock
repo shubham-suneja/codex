@@ -2040,6 +2040,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "codex-protocol",
+ "dirs",
  "futures",
  "pretty_assertions",
  "serde",

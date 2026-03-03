@@ -1,0 +1,5 @@
+#!/bin/bash
+# Example hook: fires after agent completes a turn
+# Receives JSON payload via stdin
+cat > /tmp/codex-hook-after_agent.json
+echo "[hook] after_agent fired at $(date)" >> /tmp/codex-hooks.log

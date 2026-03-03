@@ -1,0 +1,6 @@
+#!/bin/bash
+# Example hook: fires before a tool is executed
+# Receives JSON payload via stdin
+# Exit code 2 = abort the tool execution
+cat > /tmp/codex-hook-before_tool_use.json
+echo "[hook] before_tool_use fired at $(date)" >> /tmp/codex-hooks.log

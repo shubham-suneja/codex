@@ -1,0 +1,4 @@
+#!/bin/bash
+# Example hook: fires when session terminates
+cat > /tmp/codex-hook-session_end.json
+echo "[hook] session_end fired at $(date)" >> /tmp/codex-hooks.log

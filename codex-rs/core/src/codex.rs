@@ -63,6 +63,8 @@ use codex_artifact_spreadsheet::SpreadsheetArtifactRequest;
 use codex_artifact_spreadsheet::SpreadsheetArtifactResponse;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
+use codex_hooks::HookEventPrompt;
+use codex_hooks::HookEventStop;
 use codex_hooks::HookPayload;
 use codex_hooks::HookResult;
 use codex_hooks::Hooks;
@@ -1497,7 +1499,7 @@ impl Session {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(HooksConfig {
+            hooks: Hooks::new(HooksConfig { cwd: Some(std::env::current_dir().unwrap_or_default()), hooks_dir: None,
                 legacy_notify_argv: config.notify.clone(),
             }),
             rollout: Mutex::new(rollout_recorder),
@@ -5055,6 +5057,24 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
+        // Dispatch Prompt hook
+        let _ = sess
+            .hooks()
+            .dispatch(HookPayload {
+                session_id: sess.conversation_id,
+                cwd: turn_context.cwd.clone(),
+                client: turn_context.app_server_client_name.clone(),
+                triggered_at: chrono::Utc::now(),
+                hook_event: HookEvent::Prompt {
+                    event: HookEventPrompt {
+                        thread_id: sess.conversation_id,
+                        turn_id: turn_context.sub_id.clone(),
+                        input_messages: sampling_request_input_messages.clone(),
+                    },
+                },
+            })
+            .await;
+
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
         match run_sampling_request(
             Arc::clone(&sess),
@@ -8349,7 +8369,7 @@ mod tests {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(HooksConfig {
+            hooks: Hooks::new(HooksConfig { cwd: Some(std::env::current_dir().unwrap_or_default()), hooks_dir: None,
                 legacy_notify_argv: config.notify.clone(),
             }),
             rollout: Mutex::new(None),
@@ -8518,7 +8538,7 @@ mod tests {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(HooksConfig {
+            hooks: Hooks::new(HooksConfig { cwd: Some(std::env::current_dir().unwrap_or_default()), hooks_dir: None,
                 legacy_notify_argv: config.notify.clone(),
             }),
             rollout: Mutex::new(None),

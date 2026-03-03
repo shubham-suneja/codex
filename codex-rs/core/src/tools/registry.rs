@@ -15,6 +15,7 @@ use crate::tools::context::ToolPayload;
 use async_trait::async_trait;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
+use codex_hooks::HookEventBeforeToolUse;
 use codex_hooks::HookPayload;
 use codex_hooks::HookResult;
 use codex_hooks::HookToolInput;
@@ -155,6 +156,32 @@ impl ToolRegistry {
         }
 
         let is_mutating = handler.is_mutating(&invocation).await;
+
+        // Dispatch BeforeToolUse hook
+        let before_hook_input = HookToolInput::from(&invocation.payload);
+        let before_hook_payload = HookPayload {
+            session_id: invocation.session.conversation_id,
+            cwd: invocation.turn.cwd.clone(),
+            client: invocation.turn.app_server_client_name.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::BeforeToolUse {
+                event: HookEventBeforeToolUse {
+                    turn_id: invocation.turn.sub_id.clone(),
+                    call_id: invocation.call_id.clone(),
+                    tool_name: invocation.tool_name.to_string(),
+                    tool_kind: hook_tool_kind(&HookToolInput::from(&invocation.payload)),
+                    tool_input: before_hook_input,
+                },
+            },
+        };
+        let before_outcomes = invocation.session.hooks().dispatch(before_hook_payload).await;
+        for outcome in &before_outcomes {
+            if outcome.result.should_abort_operation() {
+                let message = format!("BeforeToolUse hook '{}' aborted execution", outcome.hook_name);
+                return Err(FunctionCallError::RespondToModel(message));
+            }
+        }
+
         let output_cell = tokio::sync::Mutex::new(None);
         let invocation_for_tool = invocation.clone();
 

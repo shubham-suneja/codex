@@ -1,0 +1,4 @@
+#!/bin/bash
+# Example hook: fires when agent starts working on a prompt
+cat > /tmp/codex-hook-prompt.json
+echo "[hook] prompt fired at $(date)" >> /tmp/codex-hooks.log
