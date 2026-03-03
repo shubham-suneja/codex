@@ -245,7 +245,7 @@ use crate::rollout::RolloutStoreParams;
 use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
 use crate::rollout::policy::EventPersistenceMode;
-use crate::rollout::store::InMemoryRolloutSource;
+use crate::rollout::recorder::InMemoryRolloutSource;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;

@@ -3,7 +3,7 @@ use super::*;
 use crate::protocol::CompactedItem;
 use crate::protocol::InitialHistory;
 use crate::protocol::ResumedHistory;
-use crate::rollout::store::InMemoryRolloutSource;
+use crate::rollout::recorder::InMemoryRolloutSource;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;

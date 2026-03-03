@@ -1,5 +1,5 @@
 use super::*;
-use crate::rollout::store::InMemoryRolloutSource;
+use crate::rollout::recorder::InMemoryRolloutSource;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
