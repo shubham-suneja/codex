@@ -288,8 +288,8 @@ fn sanitize_rollout_item_for_persistence(
 }
 
 impl RolloutStore {
-    // TODO(ccunningham): once rollout startup is fully `RolloutSource`-backed, move this parser
-    // under the source implementation and delete the legacy `Vec<RolloutItem>` wrapper.
+    // TODO(ccunningham): move this parser under the source implementation
+    // (not done in this PR to reduce diff)
     pub(crate) async fn load_rollout_items(
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
