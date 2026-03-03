@@ -2030,6 +2030,17 @@ impl Session {
         .await;
     }
 
+    async fn maybe_advance_previous_turn_settings_for_compaction(
+        &self,
+        turn_context: &TurnContext,
+        initial_context_injection: InitialContextInjection,
+    ) {
+        if initial_context_injection == InitialContextInjection::BeforeLastUserMessage {
+            self.set_previous_turn_settings_from_turn_context(turn_context)
+                .await;
+        }
+    }
+
     fn maybe_refresh_shell_snapshot_for_cwd(
         &self,
         previous_cwd: &Path,
@@ -5548,6 +5559,11 @@ async fn run_auto_compact(
         )
         .await?;
     }
+    sess.maybe_advance_previous_turn_settings_for_compaction(
+        turn_context.as_ref(),
+        initial_context_injection,
+    )
+    .await;
     Ok(())
 }
 
@@ -9018,6 +9034,107 @@ mod tests {
         assert_eq!(
             session.reference_context_item().await,
             Some(current_context.to_turn_context_item())
+        );
+    }
+
+    #[tokio::test]
+    async fn mid_turn_compaction_advances_previous_turn_settings_for_model_change() {
+        let (session, previous_context) = make_session_and_context().await;
+        session
+            .set_previous_turn_settings_from_turn_context(&previous_context)
+            .await;
+
+        let next_model = if previous_context.model_info.slug == "gpt-5.1" {
+            "gpt-5"
+        } else {
+            "gpt-5.1"
+        };
+        let current_context = previous_context
+            .with_model(next_model.to_string(), &session.services.models_manager)
+            .await;
+
+        session
+            .maybe_advance_previous_turn_settings_for_compaction(
+                &current_context,
+                InitialContextInjection::BeforeLastUserMessage,
+            )
+            .await;
+
+        let next_turn_context = current_context
+            .with_model(next_model.to_string(), &session.services.models_manager)
+            .await;
+        let initial_context = session.build_initial_context(&next_turn_context).await;
+        let developer_text = initial_context
+            .iter()
+            .find_map(|item| match item {
+                ResponseItem::Message { role, content, .. } if role == "developer" => {
+                    let [ContentItem::InputText { text }, ..] = content.as_slice() else {
+                        return None;
+                    };
+                    Some(text.as_str())
+                }
+                _ => None,
+            })
+            .expect("developer message");
+        assert!(
+            !developer_text.contains("<model_switch>"),
+            "next turn should not emit a stale model switch after mid-turn compaction committed the new model baseline"
+        );
+        assert_eq!(
+            session.previous_turn_settings().await,
+            Some(PreviousTurnSettings {
+                model: next_model.to_string(),
+                realtime_active: Some(current_context.realtime_active),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn pre_turn_compaction_does_not_advance_previous_turn_settings_for_model_change() {
+        let (session, previous_context) = make_session_and_context().await;
+        session
+            .set_previous_turn_settings_from_turn_context(&previous_context)
+            .await;
+
+        let next_model = if previous_context.model_info.slug == "gpt-5.1" {
+            "gpt-5"
+        } else {
+            "gpt-5.1"
+        };
+        let current_context = previous_context
+            .with_model(next_model.to_string(), &session.services.models_manager)
+            .await;
+
+        session
+            .maybe_advance_previous_turn_settings_for_compaction(
+                &current_context,
+                InitialContextInjection::DoNotInject,
+            )
+            .await;
+
+        let initial_context = session.build_initial_context(&current_context).await;
+        let developer_text = initial_context
+            .iter()
+            .find_map(|item| match item {
+                ResponseItem::Message { role, content, .. } if role == "developer" => {
+                    let [ContentItem::InputText { text }, ..] = content.as_slice() else {
+                        return None;
+                    };
+                    Some(text.as_str())
+                }
+                _ => None,
+            })
+            .expect("developer message");
+        assert!(
+            developer_text.contains("<model_switch>"),
+            "pre-turn compaction should not suppress the incoming model switch"
+        );
+        assert_eq!(
+            session.previous_turn_settings().await,
+            Some(PreviousTurnSettings {
+                model: previous_context.model_info.slug.clone(),
+                realtime_active: Some(previous_context.realtime_active),
+            })
         );
     }
 
