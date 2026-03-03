@@ -59,7 +59,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
 
-/// In-memory implementation of the rollout source used by the current eager caller.
+/// In-memory implementation of the `RolloutSource` used by the current eager caller.
 ///
 /// When reconstruction switches to lazy on-disk loading, the equivalent source should keep the
 /// same "load older items on demand" contract, but page older rollout rows from the session file
@@ -230,8 +230,9 @@ pub struct RolloutStore {
     pub(crate) rollout_path: PathBuf,
     state_db: Option<StateDbHandle>,
     event_persistence_mode: EventPersistenceMode,
-    // Canonical in-memory rollout source for this process. Startup loading and runtime appends both
-    // feed this one source so replay does not need to reconcile separate disk and memory views.
+    // Canonical in-memory `RolloutSource` for this process. Startup loading and runtime appends
+    // both feed this one `RolloutSource` so replay does not need to reconcile separate disk and
+    // memory views.
     source: Arc<Mutex<InMemoryRolloutSource>>,
 }
 
@@ -721,8 +722,8 @@ impl RolloutStore {
         let conversation_id = thread_id
             .ok_or_else(|| IoError::other("failed to parse thread ID from rollout file"))?;
         // `InitialHistory::Resumed` still carries an owned `Vec<RolloutItem>`, so this is the
-        // boundary where the store's canonical source snapshot is flattened back into the
-        // protocol-owned rollout payload for resume/fork startup.
+        // boundary where the store's canonical `RolloutSource` snapshot is flattened back into
+        // the protocol-owned rollout payload for resume/fork startup.
         // TODO(ccunningham): when resume startup becomes lazy, replace this eager
         // `InitialHistory::Resumed` materialization with a `RolloutSource`-backed history input.
         let items = source.into_items();

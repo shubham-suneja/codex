@@ -7777,8 +7777,8 @@ pub(crate) async fn read_rollout_items_from_rollout(
     path: &Path,
 ) -> std::io::Result<Vec<RolloutItem>> {
     // This helper exists specifically for callers that still need owned rollout items after
-    // loading by path. When startup and downstream consumers become source-backed, they should
-    // bypass this eager conversion.
+    // loading by path. When startup and downstream consumers become `RolloutSource`-backed, they
+    // should bypass this eager conversion.
     let items = match RolloutStore::get_rollout_history(path).await? {
         InitialHistory::New => Vec::new(),
         InitialHistory::Forked(items) => items,
