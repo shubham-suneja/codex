@@ -5244,7 +5244,6 @@ pub(crate) async fn run_turn(
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     let mut client_session_model_slug = turn_context.model_info.slug.clone();
     let initial_turn_context = Arc::clone(&turn_context);
-    let mut is_first_sampling_request = true;
     let mut should_check_pre_request_compaction = false;
 
     loop {
@@ -5289,11 +5288,8 @@ pub(crate) async fn run_turn(
             client_session_model_slug = turn_context.model_info.slug.clone();
             server_model_warning_emitted_for_turn = false;
         }
-        if !is_first_sampling_request {
-            sess.maybe_record_context_updates_for_turn(turn_context.as_ref())
-                .await;
-        }
-        is_first_sampling_request = false;
+        sess.maybe_record_context_updates_for_turn(turn_context.as_ref())
+            .await;
 
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
@@ -9034,6 +9030,38 @@ mod tests {
         assert_eq!(
             session.reference_context_item().await,
             Some(current_context.to_turn_context_item())
+        );
+    }
+
+    #[tokio::test]
+    async fn maybe_record_context_updates_for_turn_noops_when_reference_matches() {
+        let (session, turn_context) = make_session_and_context().await;
+        {
+            let mut state = session.state.lock().await;
+            state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
+        }
+        session
+            .set_previous_turn_settings_from_turn_context(&turn_context)
+            .await;
+
+        session
+            .maybe_record_context_updates_for_turn(&turn_context)
+            .await;
+
+        assert_eq!(
+            session.clone_history().await.raw_items().to_vec(),
+            Vec::new()
+        );
+        assert_eq!(
+            session.reference_context_item().await,
+            Some(turn_context.to_turn_context_item())
+        );
+        assert_eq!(
+            session.previous_turn_settings().await,
+            Some(PreviousTurnSettings {
+                model: turn_context.model_info.slug.clone(),
+                realtime_active: Some(turn_context.realtime_active),
+            })
         );
     }
 
