@@ -47,12 +47,6 @@ pub(crate) enum InitialContextInjection {
     DoNotInject,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CompactionInputKind {
-    SyntheticPrompt,
-    UserProvided,
-}
-
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
     provider.is_openai()
 }
@@ -69,14 +63,7 @@ pub(crate) async fn run_inline_auto_compact_task(
         text_elements: Vec::new(),
     }];
 
-    run_compact_task_inner(
-        sess,
-        turn_context,
-        input,
-        initial_context_injection,
-        CompactionInputKind::SyntheticPrompt,
-    )
-    .await?;
+    run_compact_task_inner(sess, turn_context, input, initial_context_injection).await?;
     Ok(())
 }
 
@@ -96,7 +83,6 @@ pub(crate) async fn run_compact_task(
         turn_context,
         input,
         InitialContextInjection::DoNotInject,
-        CompactionInputKind::UserProvided,
     )
     .await
 }
@@ -106,7 +92,6 @@ async fn run_compact_task_inner(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
-    input_kind: CompactionInputKind,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -202,17 +187,18 @@ async fn run_compact_task_inner(
         }
     }
 
-    let history_snapshot = sess.clone_history().await;
-    let history_items = history_snapshot.raw_items();
-    let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
+    let compaction_history_items = history.raw_items();
+    let summary_suffix = {
+        let history_snapshot = sess.clone_history().await;
+        get_last_assistant_message_from_turn(history_snapshot.raw_items()).unwrap_or_default()
+    };
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
-    let mut user_messages = collect_user_messages(history_items);
-    if input_kind == CompactionInputKind::SyntheticPrompt {
-        // Inline auto-compaction appends one synthetic user prompt for the compaction model call.
-        // Drop only that trailing synthetic input, and preserve any earlier real user message even
-        // if its text happens to equal the configured compaction prompt.
-        user_messages.pop();
-    }
+    let mut user_messages = collect_user_messages(compaction_history_items);
+    // Local compaction appends one synthetic user prompt for the compaction model call. Rebuild
+    // from the local prompt history so we can drop only that trailing synthetic input and preserve
+    // any earlier real user message even if its text happens to equal the configured compact
+    // prompt.
+    user_messages.pop();
 
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
 
@@ -224,7 +210,7 @@ async fn run_compact_task_inner(
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
     }
-    let ghost_snapshots: Vec<ResponseItem> = history_items
+    let ghost_snapshots: Vec<ResponseItem> = compaction_history_items
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
         .cloned()
