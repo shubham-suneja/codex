@@ -377,6 +377,9 @@ pub async fn reconcile_rollout(
         return;
     }
     let outcome =
+        // `reconcile_rollout` is the repair path when incremental rollout items were not enough to
+        // rebuild SQLite state. At this point the rollout file is the source of truth, so do not
+        // try to short-circuit back through SQLite.
         match metadata::extract_metadata_from_rollout(rollout_path, default_provider, None).await {
             Ok(outcome) => outcome,
             Err(err) => {

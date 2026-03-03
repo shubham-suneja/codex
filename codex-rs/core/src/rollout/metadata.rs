@@ -267,6 +267,9 @@ pub(crate) async fn backfill_sessions(
     for batch in rollout_paths.chunks(BACKFILL_BATCH_SIZE) {
         for rollout in batch {
             stats.scanned = stats.scanned.saturating_add(1);
+            // Backfill is the codepath that populates SQLite from rollout files, so it should
+            // always recompute metadata from the rollout instead of trying to short-circuit
+            // through cached DB rows.
             match extract_metadata_from_rollout(
                 &rollout.path,
                 config.model_provider_id.as_str(),

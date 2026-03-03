@@ -1143,6 +1143,9 @@ async fn resume_candidate_matches_cwd(
         return cwd_matches(latest_turn_context_cwd, cwd);
     }
 
+    // This is already the fallback after checking the cached cwd and the latest persisted
+    // `TurnContext`. If those do not resolve the match, recomputing metadata from rollout is the
+    // source-of-truth path; querying SQLite again would only re-read the same cached row.
     metadata::extract_metadata_from_rollout(rollout_path, default_provider, None)
         .await
         .is_ok_and(|outcome| cwd_matches(outcome.metadata.cwd.as_path(), cwd))
