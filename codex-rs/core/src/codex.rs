@@ -7273,7 +7273,7 @@ mod tests {
             phase: None,
         };
         let replacement_history = vec![
-            summary_item.clone(),
+            summary_item,
             ResponseItem::Message {
                 id: None,
                 role: "developer".to_string(),
